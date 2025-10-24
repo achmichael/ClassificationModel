@@ -163,8 +163,8 @@ def evaluate_models(models, X_test, y_test):
     
     # Simpan plot confusion matrices
     plt.tight_layout()
-    plt.savefig('models/confusion_matrices.png', dpi=300, bbox_inches='tight')
-    print(f"\n✓ Confusion matrices disimpan ke: models/confusion_matrices.png")
+    plt.savefig('output/confusion_matrices.png', dpi=300, bbox_inches='tight')
+    print(f"\n✓ Confusion matrices disimpan ke: output/confusion_matrices.png")
     plt.close()
     
     # Buat DataFrame hasil evaluasi
@@ -178,8 +178,8 @@ def evaluate_models(models, X_test, y_test):
     print(results_df.to_string(index=False))
     
     # Simpan hasil ke CSV
-    results_df.to_csv('models/model_evaluation_results.csv', index=False)
-    print(f"\n✓ Hasil evaluasi disimpan ke: models/model_evaluation_results.csv")
+    results_df.to_csv('output/model_evaluation_results.csv', index=False)
+    print(f"\n✓ Hasil evaluasi disimpan ke: output/model_evaluation_results.csv")
     
     return results_df
 
