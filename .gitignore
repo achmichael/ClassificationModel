@@ -1,0 +1,69 @@
+# ---- Python Bytecode ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Virtual Environment ----
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ---- Dataset & Output ----
+data/
+*.csv
+*.xlsx
+*.xls
+*.json
+
+# ---- Model Files ----
+models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.model
+
+# ---- Logs & Checkpoints ----
+*.log
+*.ckpt
+*.checkpoint
+logs/
+runs/
+
+# ---- Jupyter Notebook ----
+.ipynb_checkpoints
+*.ipynb_convert/
+*.nbconvert/
+.notebook_cache/
+
+# ---- Streamlit & App Cache ----
+.streamlit/
+.cache/
+__cache__/
+
+# ---- IDE / Editor ----
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ---- System Files ----
+.DS_Store
+Thumbs.db
+
+# ---- Build / Distribution ----
+build/
+dist/
+*.egg-info/
+.eggs/
+MANIFEST
+
+# ---- Misc ----
+*.bak
+*.tmp
+*.swp
+*.old
