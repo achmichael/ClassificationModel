@@ -94,7 +94,7 @@ class HalalClassifier:
     
     def extract_text_from_image(self, image_path):
         """
-        Ekstraksi teks dari gambar menggunakan Tesseract OCR
+        Ekstraksi teks dari gambar menggunakan Tesseract OCR dengan preprocessing advanced
         
         Parameters:
         -----------
@@ -112,20 +112,75 @@ class HalalClassifier:
             if image is None:
                 raise ValueError(f"Tidak dapat membaca gambar: {image_path}")
             
-            # Konversi ke grayscale
+            # PREPROCESSING ADVANCED UNTUK MENINGKATKAN AKURASI OCR
+            
+            # 1. Resize gambar jika terlalu kecil (minimum 1000px width)
+            height, width = image.shape[:2]
+            if width < 1000:
+                scale = 1000 / width
+                new_width = 1000
+                new_height = int(height * scale)
+                image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+            
+            # 2. Konversi ke grayscale
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             
-            # Thresholding
-            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            # 3. Denoise SEBELUM thresholding
+            denoised = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
             
-            # Denoise
-            denoised = cv2.fastNlMeansDenoising(thresh, None, 10, 7, 21)
+            # 4. Increase contrast dengan CLAHE
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            contrast_enhanced = clahe.apply(denoised)
             
-            # OCR
-            custom_config = r'--oem 3 --psm 6'
-            text = pytesseract.image_to_string(denoised, config=custom_config)
+            # 5. Sharpen image
+            kernel_sharpening = np.array([[-1, -1, -1],
+                                          [-1,  9, -1],
+                                          [-1, -1, -1]])
+            sharpened = cv2.filter2D(contrast_enhanced, -1, kernel_sharpening)
             
-            return text.strip()
+            # 6. Adaptive thresholding
+            binary = cv2.adaptiveThreshold(
+                sharpened, 
+                255, 
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 
+                blockSize=11, 
+                C=2
+            )
+            
+            # 7. Morphological operations
+            kernel = np.ones((1, 1), np.uint8)
+            morph = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, kernel)
+            
+            # 8. Invert jika perlu
+            if np.mean(morph) > 127:
+                morph = cv2.bitwise_not(morph)
+            
+            # EKSTRAKSI TEKS DENGAN MULTIPLE MODES
+            
+            # Mode 1: PSM 6 (Uniform block of text)
+            custom_config_1 = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
+            text_1 = pytesseract.image_to_string(morph, config=custom_config_1, lang='eng')
+            
+            # Mode 2: PSM 11 (Sparse text)
+            custom_config_2 = r'--oem 3 --psm 11 -c preserve_interword_spaces=1'
+            text_2 = pytesseract.image_to_string(morph, config=custom_config_2, lang='eng')
+            
+            # Mode 3: PSM 3 (Fully automatic)
+            custom_config_3 = r'--oem 3 --psm 3 -c preserve_interword_spaces=1'
+            text_3 = pytesseract.image_to_string(morph, config=custom_config_3, lang='eng')
+            
+            # Pilih hasil terbaik
+            results = [text_1, text_2, text_3]
+            best_text = max(results, key=lambda x: len(x.split()))
+            
+            # Clean up hasil OCR
+            cleaned_text = best_text.strip()
+            cleaned_text = re.sub(r'[^\x00-\x7F]+', ' ', cleaned_text)  # Hapus non-ASCII
+            cleaned_text = re.sub(r'\s+', ' ', cleaned_text)  # Normalize spaces
+            
+            return cleaned_text
         
         except Exception as e:
             print(f"Error saat OCR: {str(e)}")
