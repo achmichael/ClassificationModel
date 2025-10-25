@@ -11,10 +11,6 @@ from nltk.corpus import words as nltk_words
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 import os
 
-# Konfigurasi Tesseract (sesuaikan path jika diperlukan)
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# Inisialisasi stemmer dan stopwords
 @st.cache_resource
 def initialize_nlp_tools():
     """Inisialisasi tools NLP (stemmer dan stopwords)"""
@@ -23,7 +19,6 @@ def initialize_nlp_tools():
     stop_words = set(stopwords.words('indonesian'))
     return stemmer, stop_words
 
-# Dictionary normalisasi
 normalization_dict = {
     'pork': 'babi',
     'pig': 'babi',
@@ -52,7 +47,6 @@ normalization_dict = {
     'duck fat': 'lemak bebek'
 }
 
-# Kumpulan kata penting untuk memfilter hasil OCR
 COMMON_INGREDIENTS = {
     "sugar", "salt", "oil", "flour", "fat", "milk", "water", "protein",
     "carbohydrate", "carbohydrates", "fiber", "fibre", "cholesterol", "vitamin",
