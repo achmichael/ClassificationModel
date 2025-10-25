@@ -1,186 +1,243 @@
 import streamlit as st
-import pandas as pd
 import numpy as np
-import pickle
+import joblib
 import re
 import cv2
 import pytesseract
 from PIL import Image
-from nltk.corpus import stopwords
-from nltk.corpus import words as nltk_words
-from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
-import os
+from pathlib import Path
 
-@st.cache_resource
-def initialize_nlp_tools():
-    """Inisialisasi tools NLP (stemmer dan stopwords)"""
-    factory = StemmerFactory()
-    stemmer = factory.create_stemmer()
-    stop_words = set(stopwords.words('indonesian'))
-    return stemmer, stop_words
+from text_preprocessing import preprocess_text
 
-normalization_dict = {
-    'pork': 'babi',
-    'pig': 'babi',
-    'gelatin': 'babi',
-    'gelatine': 'babi',
-    'lard': 'babi',
-    'bacon': 'babi',
-    'ham': 'babi',
-    'swine': 'babi',
-    'mechanically separated chicken': 'ayam mekanis',
-    'mechanically separated turkey': 'kalkun mekanis',
-    'alcohol': 'alkohol',
-    'wine': 'anggur alkohol',
-    'beer': 'bir',
-    'rum': 'rum',
-    'vodka': 'vodka',
-    'sake': 'sake',
-    'bourbon': 'bourbon',
-    'rennet': 'rennet',
-    'lipase': 'lipase',
-    'pepsin': 'pepsin',
-    'tallow': 'lemak hewan',
-    'animal fat': 'lemak hewan',
-    'beef fat': 'lemak sapi',
-    'chicken fat': 'lemak ayam',
-    'duck fat': 'lemak bebek'
+OCR_SIMPLE_CORRECTIONS = {
+    "URBLEACHED": "UNBLEACHED",
+    "HURBLEACHED": "UNBLEACHED",
+    "BLEACHEDD": "BLEACHED",
+    "FLOLJR": "FLOUR",
+    "FLOIIR": "FLOUR",
+    "FI.OUR": "FLOUR",
+    "FLOURR": "FLOUR",
+    "FLOUR-": "FLOUR",
+    "HONONITRATE": "MONONITRATE",
+    "MONONlTRATE": "MONONITRATE",
+    "MONONLTRATE": "MONONITRATE",
+    "THLAMINE": "THIAMINE",
+    "THlAMINE": "THIAMINE",
+    "THlAMlNE": "THIAMINE",
+    "THAMINE": "THIAMINE",
+    "VITAMLN": "VITAMIN",
+    "VITAMlN": "VITAMIN",
+    "VITAM1N": "VITAMIN",
+    "RIBOFLAVLN": "RIBOFLAVIN",
+    "RIBOFLAVlN": "RIBOFLAVIN",
+    "RIBOFLAVINN": "RIBOFLAVIN",
+    "FOLLC": "FOLIC",
+    "FOLIC": "FOLIC",
+    "FOLLC ACID": "FOLIC ACID",
+    "FOLIC ACID": "FOLIC ACID",
+    "L RON": "IRON",
+    "LRON": "IRON",
+    "I RON": "IRON",
+    "lRON": "IRON",
+    "NlACIN": "NIACIN",
+    "NIAClN": "NIACIN",
+    "REDUCED lRON": "REDUCED IRON",
+    "REDUCED LRON": "REDUCED IRON",
+    "REDUCED L RON": "REDUCED IRON",
+    "MlLK": "MILK",
+    "SODlUM": "SODIUM"
 }
 
-COMMON_INGREDIENTS = {
-    "sugar", "salt", "oil", "flour", "fat", "milk", "water", "protein",
-    "carbohydrate", "carbohydrates", "fiber", "fibre", "cholesterol", "vitamin",
-    "vitamins", "iron", "ingredient", "ingredients", "contains", "may", "contain",
-    "wheat", "soy", "egg", "eggs", "milkfat", "butter", "cream", "powder", "yeast",
-    "cocoa", "flavor", "flavour", "extract", "vanilla", "natural", "artificial",
-    "citric", "acid", "color", "colour", "spice", "seasoning", "corn", "starch",
-    "whey", "gluten", "malt", "barley", "rice", "oats", "palm", "canola",
-    "sunflower", "vegetable", "gelatin", "gelatine", "pork", "beef", "chicken",
-    "turkey", "fish", "shrimp", "shellfish", "garlic", "onion", "pepper",
-    "vinegar", "lemon", "juice", "strawberry", "chocolate", "honey", "coconut",
-    "almond", "peanut", "hazelnut", "cashew", "lactose", "sucrose", "fructose",
-    "glucose", "sorbitol", "xylitol", "syrup", "palmolein", "shortening",
-    "emulsifier", "stabilizer", "preservative", "additive", "sweetener",
-    "cookie", "cookies"
-}
+OCR_REGEX_CORRECTIONS = [
+    (re.compile(r'(?<=\w)1(?=\w)'), 'I'),
+    (re.compile(r'(?<=\w)0(?=\w)'), 'O'),
+    (re.compile(r'(?<=\w)5(?=\w)'), 'S'),
+    (re.compile(r'(?<=\w)8(?=\w)'), 'B'),
+    (re.compile(r'(?<=\w)6(?=\w)'), 'G'),
+    (re.compile(r'(?<=\w)4(?=\w)'), 'A'),
+    (re.compile(r'(?<=\w)3(?=\w)'), 'E')
+]
 
-NUTRITION_TERMS = {
-    "nutrition", "facts", "serving", "size", "per", "calorie", "calories",
-    "total", "daily", "value", "amount", "energy", "saturated", "trans",
-    "polyunsaturated", "monounsaturated", "unsaturated", "fat", "fats", "sodium",
-    "potassium", "calcium", "dietary", "fiber", "fibers", "sugars", "sugar",
-    "includes", "added", "protein", "proteins", "cholesterol", "carbohydrate",
-    "carbohydrates", "percent", "dv", "servings", "per", "container", "portion",
-    "nutritionals", "facts", "mg", "daily", "value"
-}
-
-FUNCTION_WORDS = {
-    "and", "or", "with", "from", "for", "of", "in", "on", "by", "to",
-    "as", "at", "the", "this", "that", "made", "using", "based", "are",
-    "about", "less", "than", "more", "your", "needs", "higher", "lower",
-    "depending", "diet", "per", "each", "their", "may", "be", "is"
-}
-
-SIGNAL_TERMS = COMMON_INGREDIENTS.union(
-    NUTRITION_TERMS,
-    {
-        "diet", "needs", "calorie", "calories", "daily", "values", "serving",
-        "servings", "size", "container", "amount", "percent", "value",
-        "nutrition", "facts", "fat", "saturated", "trans", "polyunsaturated",
-        "monounsaturated", "cholesterol", "sodium", "potassium", "carbohydrate",
-        "fiber", "sugars", "protein", "vitamin", "calcium", "iron"
-    }
+SUBINGREDIENT_ANCHORS = (
+    "ENRICHED FLOUR",
+    "ENRICHED WHEAT FLOUR",
+    "UNBLEACHED ENRICHED FLOUR",
+    "BLEACHED ENRICHED FLOUR"
 )
 
-MEASUREMENT_PATTERN = re.compile(
-    r"^\d+(?:,\d{3})*(?:\.\d+)?(?:mg|g|kg|mcg|kj|kcal|cal|%)?$",
-    re.IGNORECASE
+SUBINGREDIENT_TERMINATORS = (
+    "FOLIC ACID",
+    "FOLATE",
+    "VITAMIN B9",
+    "RIBOFLAVIN",
+    "THIAMINE MONONITRATE",
+    "REDUCED IRON",
+    "NIACIN",
+    "WHEAT FLOUR"
+)
+
+SECTION_BOUNDARIES = (
+    " INGREDIENTS",
+    " CONTAINS",
+    " MAY CONTAIN",
+    " ALLERGEN",
+    " ALLERGENS",
+    " DISTRIBUTED",
+    " MANUFACTURED",
+    " PRODUCED",
+    " PACKAGED",
+    " NET ",
+    " BEST",
+    " KEEP",
+    " STORE",
+    " DIRECTIONS",
+    " PREPARED",
+    " WARNING",
+    " NUTRITION"
 )
 
 
-@st.cache_resource
-def load_english_vocabulary():
-    """Load daftar kata bahasa Inggris dari NLTK (fallback ke set kosong jika tidak tersedia)."""
-    try:
-        english_vocab = {word.lower() for word in nltk_words.words()}
-    except LookupError:
-        english_vocab = set()
-    return english_vocab
+def _apply_regex_corrections(text: str) -> str:
+    for pattern, replacement in OCR_REGEX_CORRECTIONS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
-@st.cache_resource
-def load_valid_ocr_vocabulary():
-    """Siapkan vocabulary gabungan untuk pembersihan teks OCR."""
-    english_vocab = load_english_vocabulary()
-    combined_vocab = set().union(english_vocab, COMMON_INGREDIENTS, NUTRITION_TERMS, FUNCTION_WORDS)
-    return combined_vocab
+def _apply_simple_corrections(text: str) -> str:
+    for wrong, right in OCR_SIMPLE_CORRECTIONS.items():
+        text = re.sub(rf'\b{re.escape(wrong)}\b', right, text)
+    return text
 
 
-def clean_ocr_text(text: str) -> str:
-    """Bersihkan teks OCR dari karakter acak dan kata yang tidak relevan."""
-    if not text:
-        return ""
+def _normalize_section_headers(text: str) -> str:
+    text = re.sub(r'INGREDIENTS\s*(?![:])', 'INGREDIENTS: ', text)
+    text = re.sub(r'MAY CONTAIN\s*(?![:])', 'MAY CONTAIN: ', text)
+    text = re.sub(r'CONTAINS\s+(?!LESS|UP TO|\d|[:])', 'CONTAINS: ', text)
+    return text
 
-    if not isinstance(text, str):
-        text = str(text)
 
-    text = text.lower()
+def _wrap_enriched_flour_sections(text: str) -> str:
+    for anchor in SUBINGREDIENT_ANCHORS:
+        search_pos = 0
+        while True:
+            idx = text.find(anchor, search_pos)
+            if idx == -1:
+                break
+            after_anchor = idx + len(anchor)
+            if text[after_anchor:after_anchor + 2] == ' (':
+                search_pos = after_anchor
+                continue
 
-    # Hapus rangkaian huruf tunggal berulang (contoh: "g g g")
-    text = re.sub(r'(?:\b[a-z]\b[\s,.;:!?-]*){3,}', ' ', text)
+            stop_idx = -1
+            for terminator in SUBINGREDIENT_TERMINATORS:
+                term_idx = text.find(terminator, after_anchor)
+                if term_idx != -1:
+                    stop_idx = max(stop_idx, term_idx + len(terminator))
 
-    allowed_vocab = load_valid_ocr_vocabulary()
-    cleaned_lines = []
+            if stop_idx == -1:
+                boundary_idx = len(text)
+                for boundary in SECTION_BOUNDARIES:
+                    boundary_pos = text.find(boundary, after_anchor)
+                    if boundary_pos != -1 and boundary_pos < boundary_idx:
+                        boundary_idx = boundary_pos
+                stop_idx = boundary_idx
 
-    for raw_line in text.splitlines():
-        line = re.sub(r'[^a-z0-9\s/%().,-]', ' ', raw_line)
-        line = re.sub(r'[\[\]{}]', ' ', line)
-        line = re.sub(r'\s+', ' ', line).strip()
-        if not line:
+            tail_match = re.match(r'\s*\([^)]*\)', text[stop_idx:])
+            if tail_match:
+                stop_idx += tail_match.end()
+
+            include_comma = False
+            if stop_idx < len(text) and text[stop_idx] == ',':
+                include_comma = True
+                stop_idx += 1
+
+            segment = text[after_anchor:stop_idx].strip()
+            if segment.startswith('('):
+                search_pos = after_anchor
+                continue
+
+            if segment:
+                segment = segment.strip(', ')
+                insertion = f" ({segment})"
+                next_slice = text[stop_idx:]
+                if include_comma:
+                    insertion += ','
+                else:
+                    next_char = next_slice.lstrip()[:1]
+                    if next_char and next_char not in {'.', ';', ')', ','}:
+                        insertion += ','
+                text = text[:after_anchor] + insertion + text[stop_idx:]
+                search_pos = after_anchor + len(insertion)
+            else:
+                search_pos = after_anchor
+
+    return text
+
+
+def _remove_consecutive_duplicates(text: str) -> str:
+    parts = text.split()
+    cleaned_parts = []
+    previous_key = None
+
+    for part in parts:
+        key = re.sub(r'[^A-Z0-9%]', '', part)
+        if key and key == previous_key:
             continue
+        cleaned_parts.append(part)
+        previous_key = key
 
-        valid_tokens = []
-        line_has_signal = False
+    return ' '.join(cleaned_parts)
 
-        for token in line.split(' '):
-            if not token:
-                continue
 
-            cleaned_token = token.strip('()')
-            cleaned_token = cleaned_token.rstrip('.,;:')
-            if not cleaned_token:
-                continue
+def _tidy_punctuation_and_spacing(text: str) -> str:
+    text = text.replace('[', '(').replace(']', ')')
+    text = text.replace('{', '(').replace('}', ')')
+    text = re.sub(r'\s*,\s*', ', ', text)
+    text = re.sub(r'\s*;\s*', '; ', text)
+    text = re.sub(r'\s*\(\s*', ' (', text)
+    text = re.sub(r'\s*\)\s*', ') ', text)
+    text = re.sub(r',\s*,+', ', ', text)
+    text = re.sub(r'\(\s*,', '(', text)
+    text = re.sub(r',\s*\)', ')', text)
+    text = re.sub(r'\s+', ' ', text)
+    text = text.replace('( ', '(').replace(' )', ')')
+    text = re.sub(r'\)(?=[A-Z0-9])', r') ', text)
+    text = re.sub(r'\s+([,.;)])', r'\1', text)
+    text = re.sub(r'([(:,])\s+', r'\1 ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip(' ,;')
 
-            if len(cleaned_token) == 1 and not cleaned_token.isdigit():
-                continue
 
-            if cleaned_token.isalpha() and len(set(cleaned_token)) == 1 and len(cleaned_token) > 2:
-                continue
-
-            normalized = cleaned_token.lower()
-
-            measurement = bool(MEASUREMENT_PATTERN.match(cleaned_token))
-
-            base_candidates = {normalized}
-            if len(normalized) > 3:
-                base_candidates.update({normalized.rstrip('s'), normalized.rstrip('es')})
-
-            is_known_word = any(base in allowed_vocab for base in base_candidates if base)
-
-            if measurement or is_known_word:
-                valid_tokens.append(cleaned_token)
-                if measurement or normalized in SIGNAL_TERMS:
-                    line_has_signal = True
-
-        if valid_tokens and line_has_signal:
-            cleaned_lines.append(' '.join(valid_tokens))
-
-    if not cleaned_lines:
+def clean_ocr_text(raw_text: str) -> str:
+    """Bersihkan dan format ulang teks OCR agar menyerupai label asli."""
+    if not raw_text:
         return ""
 
-    cleaned_text = ' '.join(cleaned_lines)
-    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
-    return cleaned_text
+    text = str(raw_text)
+    text = text.replace('\r', ' ')
+    text = re.sub(r'\s+', ' ', text)
+    text = text.upper()
+
+    text = _apply_regex_corrections(text)
+    text = _apply_simple_corrections(text)
+
+    text = re.sub(r'\bAI\b', '(', text)
+    text = re.sub(r'\bA1\b', '(', text)
+    text = re.sub(r'\bI\)', ')', text)
+    text = text.replace(' )', ')').replace('( ', '(')
+
+    text = text.replace('..', '.')
+    text = text.replace(',,', ',')
+
+    text = _remove_consecutive_duplicates(text)
+    text = _normalize_section_headers(text)
+    text = _wrap_enriched_flour_sections(text)
+    text = _tidy_punctuation_and_spacing(text)
+
+    if text and not text.endswith('.'):
+        text += '.'
+
+    return text
 
 
 def extract_text_from_image(image_file, return_debug=False):
@@ -348,56 +405,6 @@ def extract_text_from_image(image_file, return_debug=False):
             return "", {'error': str(e)}
         st.error(f"Error saat ekstraksi teks dari gambar: {str(e)}")
         return ""
-
-
-def preprocess_text(text, stemmer, stop_words):
-    """
-    Fungsi untuk preprocessing teks
-    
-    Parameters:
-    -----------
-    text : str
-        Teks yang akan diproses
-    stemmer : Stemmer
-        Sastrawi stemmer
-    stop_words : set
-        Set stopwords bahasa Indonesia
-    
-    Returns:
-    --------
-    str : Teks yang sudah diproses
-    """
-    if pd.isna(text) or text == "":
-        return ""
-    
-    # Ubah ke huruf kecil
-    text = text.lower()
-    
-    # Normalisasi kata-kata asing
-    for foreign_word, indonesian_word in normalization_dict.items():
-        text = text.replace(foreign_word, indonesian_word)
-    
-    # Hapus tanda baca dan angka
-    text = re.sub(r'[^a-z\s]', '', text)
-    
-    # Hapus spasi berlebih
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Tokenisasi
-    words = text.split()
-    
-    # Hapus stopwords
-    words = [word for word in words if word not in stop_words]
-    
-    # Stemming
-    words = [stemmer.stem(word) for word in words]
-    
-    # Gabungkan kembali
-    clean_text = ' '.join(words)
-    
-    return clean_text
-
-
 @st.cache_resource
 def load_model_and_vectorizer():
     """
@@ -408,14 +415,14 @@ def load_model_and_vectorizer():
     tuple : (model, vectorizer, model_name, accuracy)
     """
     try:
-        with open('models/best_model.pkl', 'rb') as f:
-            best_model_data = pickle.load(f)
-        
+        best_model_path = Path('models/best_model.joblib')
+        best_model_data = joblib.load(best_model_path)
+
         model = best_model_data['model']
         vectorizer = best_model_data['vectorizer']
-        model_name = best_model_data['model_name']
-        accuracy = best_model_data['accuracy']
-        
+        model_name = best_model_data.get('model_name', 'Unknown Model')
+        accuracy = best_model_data.get('accuracy', 0.0)
+
         return model, vectorizer, model_name, accuracy
     
     except FileNotFoundError:
@@ -423,125 +430,69 @@ def load_model_and_vectorizer():
         return None, None, None, None
 
 
-def predict_halal_status(text, model, vectorizer, stemmer, stop_words):
-    """
-    Prediksi status halal/haram dari teks
-    
-    Parameters:
-    -----------
-    text : str
-        Teks komposisi produk
-    model : sklearn model
-        Model yang sudah dilatih
-    vectorizer : TfidfVectorizer
-        Vectorizer yang sudah di-fit
-    stemmer : Stemmer
-        Sastrawi stemmer
-    stop_words : set
-        Set stopwords
-    
-    Returns:
-    --------
-    tuple : (prediction, confidence)
-    """
-    # Preprocessing teks
-    clean_text = preprocess_text(text, stemmer, stop_words)
-    
-    if clean_text == "":
+def predict_halal_status(text: str, model, vectorizer):
+    """Prediksi status halal/haram dari teks tunggal."""
+    clean_text = preprocess_text(text)
+    if not clean_text:
         return "Unknown", 0.0
-    
-    # Transformasi ke TF-IDF vector
+
     text_vector = vectorizer.transform([clean_text])
-    
-    # Prediksi
     prediction = model.predict(text_vector)[0]
-    
-    # Confidence score (jika model mendukung predict_proba)
+
+    confidence = None
     try:
         proba = model.predict_proba(text_vector)[0]
-        if prediction.lower() == 'halal':
-            confidence = proba[0] if model.classes_[0] == 'halal' else proba[1]
-        else:
-            confidence = proba[1] if model.classes_[1] == 'haram' else proba[0]
+        class_index = list(model.classes_).index(prediction)
+        confidence = proba[class_index]
     except AttributeError:
-        # Model tidak mendukung predict_proba (misalnya SVM)
-        # Gunakan decision_function untuk estimasi confidence
         try:
             decision = model.decision_function(text_vector)[0]
-            confidence = 1 / (1 + np.exp(-decision))  # Sigmoid
-            if prediction.lower() == 'halal':
+            confidence = 1 / (1 + np.exp(-decision))
+            if prediction.lower() == "halal":
                 confidence = 1 - confidence
-        except:
+        except Exception:
             confidence = None
-    
+
     return prediction.capitalize(), confidence
 
 
-def process_input(input_data, input_type, model, vectorizer, stemmer, stop_words, return_debug=False):
-    """
-    Memproses input (teks atau gambar) dan mengembalikan hasil prediksi
-    
-    Parameters:
-    -----------
-    input_data : str atau UploadedFile
-        Data input (teks string atau file gambar)
-    input_type : str
-        Jenis input: 'text' atau 'image'
-    model : sklearn model
-        Model yang sudah dilatih
-    vectorizer : TfidfVectorizer
-        Vectorizer yang sudah di-fit
-    stemmer : Stemmer
-        Sastrawi stemmer
-    stop_words : set
-        Set stopwords
-    
-    Returns:
-    --------
-    dict : Dictionary berisi hasil pemrosesan dan prediksi
-    """
+def process_input(input_data, input_type, model, vectorizer, return_debug=False):
+    """Proses input teks atau gambar sebelum diprediksi."""
     result = {
-        'input_type': input_type,
-        'original_text': '',
-        'ocr_text': '',
-        'preprocessed_text': '',
-        'prediction': '',
-        'confidence': 0.0,
-        'ocr_debug': None
+        "input_type": input_type,
+        "original_text": "",
+        "ocr_text": "",
+        "preprocessed_text": "",
+        "prediction": "",
+        "confidence": 0.0,
+        "ocr_debug": None,
     }
-    
-    # [1] & [2] Extract teks dari input
-    if input_type == 'image':
-        # Extract teks dari gambar menggunakan OCR
+
+    if input_type == "image":
         ocr_output = extract_text_from_image(input_data, return_debug=return_debug)
         if return_debug:
             ocr_text, debug_data = ocr_output
-            result['ocr_debug'] = debug_data
+            result["ocr_debug"] = debug_data
         else:
             ocr_text = ocr_output
-        result['ocr_text'] = ocr_text
-        result['original_text'] = ocr_text
+        result["ocr_text"] = ocr_text
+        result["original_text"] = ocr_text
         text_to_process = ocr_text
     else:
-        # Gunakan teks langsung
-        result['original_text'] = input_data
+        result["original_text"] = input_data
         text_to_process = input_data
-    
-    # [3] Preprocessing teks
-    preprocessed = preprocess_text(text_to_process, stemmer, stop_words)
-    result['preprocessed_text'] = preprocessed
-    
-    # [4] & [5] Prediksi menggunakan model
+
+    preprocessed = preprocess_text(text_to_process)
+    result["preprocessed_text"] = preprocessed
+
     if preprocessed:
-        prediction, confidence = predict_halal_status(
-            text_to_process, model, vectorizer, stemmer, stop_words
-        )
-        result['prediction'] = prediction
-        result['confidence'] = confidence
+        prediction, confidence = predict_halal_status(text_to_process, model, vectorizer)
+        result["prediction"] = prediction
+        result["confidence"] = confidence
     else:
-        result['prediction'] = 'Unknown'
-        result['confidence'] = 0.0
-    
+        result["prediction"] = "Unknown"
+        result["confidence"] = 0.0
+
     return result
 
 
@@ -568,7 +519,6 @@ def main():
     # Load model dan tools
     with st.spinner("Loading model dan tools..."):
         model, vectorizer, model_name, accuracy = load_model_and_vectorizer()
-        stemmer, stop_words = initialize_nlp_tools()
     
     if model is None:
         st.stop()
@@ -643,8 +593,6 @@ def main():
                     input_type,
                     model,
                     vectorizer,
-                    stemmer,
-                    stop_words,
                     return_debug=show_debug
                 )
                 

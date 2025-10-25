@@ -1,125 +1,104 @@
+from pathlib import Path
+
 import pandas as pd
+from joblib import dump
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
-import pickle
 
-# 1. Load preprocessed dataset
-print("Loading preprocessed dataset...")
-df = pd.read_csv('data/preprocessed_dataset.csv')
-print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
 
-# 2. Pisahkan fitur (X) dan label (y)
-print("\nMemisahkan fitur dan label...")
-X = df['clean_text']
-y = df['label']
-
-print(f"Total samples: {len(X)}")
-print(f"Label distribution:")
-print(y.value_counts())
-
-# 3. Train-test split (80:20)
-print("\nMelakukan train-test split (80:20)...")
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, 
-    test_size=0.2, 
-    random_state=42,
-    stratify=y  # Memastikan distribusi label seimbang di train dan test
+DATASETS = (
+    (Path("data/preprocessed_dataset.csv"), "baseline"),
+    (Path("data/augmented_dataset.csv"), "augmented"),
 )
 
-print(f"\nJumlah data training: {len(X_train)}")
-print(f"Jumlah data testing: {len(X_test)}")
 
-print(f"\nDistribusi label di data training:")
-print(y_train.value_counts())
-print(f"\nDistribusi label di data testing:")
-print(y_test.value_counts())
+def _vectorizer() -> TfidfVectorizer:
+    return TfidfVectorizer(
+        max_features=5000,
+        min_df=2,
+        max_df=0.8,
+        ngram_range=(1, 2),
+        sublinear_tf=True,
+    )
 
-# 4. TF-IDF Vectorization
-print("\n" + "="*80)
-print("Melakukan TF-IDF Vectorization...")
-print("="*80)
 
-# Inisialisasi TF-IDF Vectorizer
-tfidf_vectorizer = TfidfVectorizer(
-    max_features=5000,  # Batasi fitur maksimal
-    min_df=2,           # Kata harus muncul minimal di 2 dokumen
-    max_df=0.8,         # Kata tidak boleh muncul di lebih dari 80% dokumen
-    ngram_range=(1, 2), # Unigram dan bigram
-    sublinear_tf=True   # Gunakan skala logaritmik untuk term frequency
-)
+def _summarise_features(vectorizer: TfidfVectorizer, X_train_matrix, top_n: int = 20) -> None:
+    feature_names = vectorizer.get_feature_names_out()
+    tfidf_scores = X_train_matrix.mean(axis=0).A1
+    top_indices = tfidf_scores.argsort()[-top_n:][::-1]
+    for rank, feature_idx in enumerate(top_indices, 1):
+        print(f"{rank:2d}. {feature_names[feature_idx]:30s} - Score: {tfidf_scores[feature_idx]:.4f}")
 
-# Fit dan transform data training
-X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
-print(f"\nTF-IDF fit pada data training")
-print(f"Shape X_train_tfidf: {X_train_tfidf.shape}")
-print(f"Jumlah fitur yang dihasilkan: {X_train_tfidf.shape[1]}")
 
-# Transform data testing (menggunakan vocabulary dari training)
-X_test_tfidf = tfidf_vectorizer.transform(X_test)
-print(f"Shape X_test_tfidf: {X_test_tfidf.shape}")
+def process_dataset(dataset_path: Path, label: str) -> None:
+    if not dataset_path.exists():
+        print(f"\n⚠️  Dataset {dataset_path} tidak ditemukan — lewati tahap {label}.")
+        return
 
-# 5. Tampilkan top 20 fitur dengan TF-IDF score tertinggi
-print("\n" + "="*80)
-print("Top 20 Fitur dengan TF-IDF Score Tertinggi:")
-print("="*80)
+    print("\n" + "=" * 80)
+    print(f"Menyiapkan dataset: {label.upper()}")
+    print("=" * 80)
 
-# Hitung rata-rata TF-IDF score untuk setiap fitur
-feature_names = tfidf_vectorizer.get_feature_names_out()
-tfidf_scores = X_train_tfidf.mean(axis=0).A1
-top_indices = tfidf_scores.argsort()[-20:][::-1]
+    df = pd.read_csv(dataset_path)
+    if "clean_text" not in df:
+        raise ValueError(f"Kolom 'clean_text' tidak ditemukan pada {dataset_path}")
 
-for idx, feature_idx in enumerate(top_indices, 1):
-    print(f"{idx:2d}. {feature_names[feature_idx]:30s} - Score: {tfidf_scores[feature_idx]:.4f}")
+    X = df["clean_text"].astype(str)
+    y = df["label"]
 
-# 6. Simpan TF-IDF vectorizer dan hasil ekstraksi fitur
-print("\n" + "="*80)
-print("Menyimpan hasil...")
-print("="*80)
+    print(f"Total samples: {len(X)}")
+    print("Distribusi label:")
+    print(y.value_counts())
 
-# Simpan TF-IDF vectorizer
-with open('models/tfidf_vectorizer.pkl', 'wb') as f:
-    pickle.dump(tfidf_vectorizer, f)
-print("✓ TF-IDF Vectorizer disimpan ke: models/tfidf_vectorizer.pkl")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+        stratify=y,
+    )
 
-# Simpan data yang sudah di-split
-with open('models/train_test_data.pkl', 'wb') as f:
-    pickle.dump({
-        'X_train_tfidf': X_train_tfidf,
-        'X_test_tfidf': X_test_tfidf,
-        'y_train': y_train,
-        'y_test': y_test,
-        'X_train_text': X_train,
-        'X_test_text': X_test
-    }, f)
-print("✓ Data train-test disimpan ke: models/train_test_data.pkl")
+    print(f"\nJumlah data training: {len(X_train)}")
+    print(f"Jumlah data testing : {len(X_test)}")
 
-# 7. Tampilkan contoh transformasi
-print("\n" + "="*80)
-print("Contoh Transformasi TF-IDF:")
-print("="*80)
+    vectorizer = _vectorizer()
+    X_train_tfidf = vectorizer.fit_transform(X_train)
+    X_test_tfidf = vectorizer.transform(X_test)
 
-sample_idx = 0
-sample_text = X_train.iloc[sample_idx]
-sample_label = y_train.iloc[sample_idx]
+    print(f"\nTF-IDF shape (train): {X_train_tfidf.shape}")
+    print(f"TF-IDF shape (test) : {X_test_tfidf.shape}")
 
-print(f"Text: {sample_text[:200]}...")
-print(f"Label: {sample_label}")
-print(f"\nTop 10 fitur TF-IDF untuk contoh ini:")
+    if label == "baseline":
+        print("\nTop 20 fitur (berdasarkan skor rata-rata TF-IDF):")
+        _summarise_features(vectorizer, X_train_tfidf)
 
-# Ambil vector TF-IDF untuk sample ini
-sample_vector = X_train_tfidf[sample_idx].toarray()[0]
-top_feature_indices = sample_vector.argsort()[-10:][::-1]
+    models_path = Path("models")
+    models_path.mkdir(parents=True, exist_ok=True)
 
-for idx, feature_idx in enumerate(top_feature_indices, 1):
-    if sample_vector[feature_idx] > 0:
-        print(f"{idx:2d}. {feature_names[feature_idx]:30s} - Score: {sample_vector[feature_idx]:.4f}")
+    vectorizer_path = models_path / f"tfidf_vectorizer_{label}.joblib"
+    train_test_path = models_path / f"train_test_data_{label}.joblib"
 
-print("\n" + "="*80)
-print("RINGKASAN:")
-print("="*80)
-print(f"✓ Data berhasil di-split menjadi train dan test")
-print(f"✓ Training set: {len(X_train)} samples ({len(X_train)/len(X)*100:.1f}%)")
-print(f"✓ Testing set: {len(X_test)} samples ({len(X_test)/len(X)*100:.1f}%)")
-print(f"✓ TF-IDF features: {X_train_tfidf.shape[1]} fitur")
-print(f"✓ Semua file berhasil disimpan")
-print("="*80)
+    dump(vectorizer, vectorizer_path)
+    dump(
+        {
+            "X_train_tfidf": X_train_tfidf,
+            "X_test_tfidf": X_test_tfidf,
+            "y_train": y_train,
+            "y_test": y_test,
+            "X_train_text": X_train,
+            "X_test_text": X_test,
+        },
+        train_test_path,
+    )
+
+    print(f"\n✓ Vectorizer disimpan ke {vectorizer_path}")
+    print(f"✓ Data split disimpan ke {train_test_path}")
+
+
+def main() -> None:
+    for dataset_path, label in DATASETS:
+        process_dataset(dataset_path, label)
+
+
+if __name__ == "__main__":
+    main()

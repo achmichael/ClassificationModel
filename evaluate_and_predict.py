@@ -1,85 +1,29 @@
-import pandas as pd
-import numpy as np
-import pickle
-import re
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import confusion_matrix, classification_report
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import joblib
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-from nltk.corpus import stopwords
-from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
-# Inisialisasi stemmer dan stopwords
-factory = StemmerFactory()
-stemmer = factory.create_stemmer()
-stop_words = set(stopwords.words('indonesian'))
+from text_preprocessing import preprocess_text
 
-# Dictionary normalisasi (sama dengan preprocess_data.py)
-normalization_dict = {
-    'pork': 'babi',
-    'pig': 'babi',
-    'gelatin': 'babi',
-    'gelatine': 'babi',
-    'lard': 'babi',
-    'bacon': 'babi',
-    'ham': 'babi',
-    'swine': 'babi',
-    'mechanically separated chicken': 'ayam mekanis',
-    'mechanically separated turkey': 'kalkun mekanis',
-    'alcohol': 'alkohol',
-    'wine': 'anggur alkohol',
-    'beer': 'bir',
-    'rum': 'rum',
-    'vodka': 'vodka',
-    'sake': 'sake',
-    'bourbon': 'bourbon',
-    'rennet': 'rennet',
-    'lipase': 'lipase',
-    'pepsin': 'pepsin',
-    'tallow': 'lemak hewan',
-    'animal fat': 'lemak hewan',
-    'beef fat': 'lemak sapi',
-    'chicken fat': 'lemak ayam',
-    'duck fat': 'lemak bebek'
-}
+MODELS_DIR = Path("models")
+OUTPUT_DIR = Path("output")
 
 
-def preprocess_text(text):
-    """
-    Fungsi untuk preprocessing teks (sama dengan di preprocess_data.py)
-    """
-    if pd.isna(text) or text == "":
-        return ""
-    
-    # Ubah ke huruf kecil
-    text = text.lower()
-    
-    # Normalisasi kata-kata asing
-    for foreign_word, indonesian_word in normalization_dict.items():
-        text = text.replace(foreign_word, indonesian_word)
-    
-    # Hapus tanda baca dan angka
-    text = re.sub(r'[^a-z\s]', '', text)
-    
-    # Hapus spasi berlebih
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Tokenisasi
-    words = text.split()
-    
-    # Hapus stopwords
-    words = [word for word in words if word not in stop_words]
-    
-    # Stemming
-    words = [stemmer.stem(word) for word in words]
-    
-    # Gabungkan kembali
-    clean_text = ' '.join(words)
-    
-    return clean_text
-
-
-def evaluate_models(models, X_test, y_test):
+def evaluate_models(models, X_test, y_test, X_train=None, y_train=None, dataset_label: str = "baseline"):
     """
     Fungsi untuk mengevaluasi semua model dan menampilkan confusion matrix
     
@@ -98,89 +42,102 @@ def evaluate_models(models, X_test, y_test):
     """
     
     results = []
-    
-    print("\n" + "="*80)
-    print("EVALUASI DETAIL SEMUA MODEL")
-    print("="*80)
-    
-    # Buat figure untuk confusion matrices
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle('Confusion Matrix untuk Semua Model', fontsize=16, fontweight='bold')
-    axes = axes.ravel()
-    
+    print("\n" + "=" * 80)
+    print(f"EVALUASI DETAIL SEMUA MODEL ({dataset_label.upper()})")
+    print("=" * 80)
+
+    n_models = len(models)
+    cols = 2 if n_models > 1 else 1
+    rows = int(np.ceil(n_models / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(7 * cols, 5 * rows))
+    axes = np.array(axes).reshape(-1)
+    fig.suptitle(f"Confusion Matrix untuk Semua Model ({dataset_label})", fontsize=16, fontweight="bold")
+
     for idx, (model_name, model) in enumerate(models.items()):
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"Model: {model_name}")
-        print(f"{'='*80}")
-        
-        # Prediksi
+        print(f"{'=' * 80}")
+
         y_pred = model.predict(X_test)
-        
-        # Hitung metrik
+
         accuracy = accuracy_score(y_test, y_pred)
-        precision = precision_score(y_test, y_pred, pos_label='haram', average='binary')
-        recall = recall_score(y_test, y_pred, pos_label='haram', average='binary')
-        f1 = f1_score(y_test, y_pred, pos_label='haram', average='binary')
-        
-        # Confusion matrix
-        cm = confusion_matrix(y_test, y_pred, labels=['halal', 'haram'])
-        
-        # Tampilkan metrik
-        print(f"\nMetrik Evaluasi:")
-        print(f"  Accuracy  : {accuracy:.4f} ({accuracy*100:.2f}%)")
-        print(f"  Precision : {precision:.4f} ({precision*100:.2f}%)")
-        print(f"  Recall    : {recall:.4f} ({recall*100:.2f}%)")
-        print(f"  F1-Score  : {f1:.4f} ({f1*100:.2f}%)")
-        
-        print(f"\nConfusion Matrix:")
+        precision = precision_score(y_test, y_pred, pos_label="haram", average="binary")
+        recall = recall_score(y_test, y_pred, pos_label="haram", average="binary")
+        f1 = f1_score(y_test, y_pred, pos_label="haram", average="binary")
+
+        cm = confusion_matrix(y_test, y_pred, labels=["halal", "haram"])
+
+        if X_train is not None and y_train is not None:
+            train_accuracy = accuracy_score(y_train, model.predict(X_train))
+            print(f"Training Accuracy: {train_accuracy:.4f} ({train_accuracy * 100:.2f}%)")
+            print(f"Testing Accuracy : {accuracy:.4f} ({accuracy * 100:.2f}%)")
+            if train_accuracy - accuracy > 0.10:
+                print("⚠️  potensi overfitting (selisih > 10%)")
+        else:
+            print(f"Accuracy : {accuracy:.4f} ({accuracy * 100:.2f}%)")
+
+        print("Precision : {:.4f} ({:.2f}%)".format(precision, precision * 100))
+        print("Recall    : {:.4f} ({:.2f}%)".format(recall, recall * 100))
+        print("F1-Score : {:.4f} ({:.2f}%)".format(f1, f1 * 100))
+
+        print("\nClassification Report:")
+        print(classification_report(y_test, y_pred, target_names=["halal", "haram"]))
+
+        print("Confusion Matrix:")
         print(f"              Predicted")
         print(f"              halal  haram")
         print(f"Actual halal  {cm[0][0]:5d}  {cm[0][1]:5d}")
         print(f"       haram  {cm[1][0]:5d}  {cm[1][1]:5d}")
-        
-        # Plot confusion matrix
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                    xticklabels=['halal', 'haram'],
-                    yticklabels=['halal', 'haram'],
-                    ax=axes[idx], cbar=True)
-        axes[idx].set_title(f'{model_name}\nAccuracy: {accuracy:.4f}', 
-                           fontsize=12, fontweight='bold')
-        axes[idx].set_ylabel('Actual Label')
-        axes[idx].set_xlabel('Predicted Label')
-        
-        # Simpan hasil ke list
-        results.append({
-            'Model': model_name,
-            'Accuracy': accuracy,
-            'Precision': precision,
-            'Recall': recall,
-            'F1-Score': f1,
-            'True Halal': cm[0][0],
-            'False Haram': cm[0][1],
-            'False Halal': cm[1][0],
-            'True Haram': cm[1][1]
-        })
-    
-    # Simpan plot confusion matrices
+
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=["halal", "haram"],
+            yticklabels=["halal", "haram"],
+            ax=axes[idx],
+            cbar=True,
+        )
+        axes[idx].set_title(f"{model_name}\nAccuracy: {accuracy:.4f}", fontsize=12, fontweight="bold")
+        axes[idx].set_ylabel("Actual Label")
+        axes[idx].set_xlabel("Predicted Label")
+
+        results.append(
+            {
+                "Model": model_name,
+                "Accuracy": accuracy,
+                "Precision": precision,
+                "Recall": recall,
+                "F1-Score": f1,
+                "True Halal": cm[0][0],
+                "False Haram": cm[0][1],
+                "False Halal": cm[1][0],
+                "True Haram": cm[1][1],
+            }
+        )
+
+    for extra_axis in axes[len(models) :]:
+        extra_axis.axis("off")
+
     plt.tight_layout()
-    plt.savefig('output/confusion_matrices.png', dpi=300, bbox_inches='tight')
-    print(f"\n✓ Confusion matrices disimpan ke: output/confusion_matrices.png")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    plot_path = OUTPUT_DIR / f"confusion_matrices_{dataset_label}.png"
+    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+    print(f"\n✓ Confusion matrices disimpan ke: {plot_path}")
     plt.close()
-    
-    # Buat DataFrame hasil evaluasi
-    results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('Accuracy', ascending=False).reset_index(drop=True)
-    
-    # Tampilkan tabel hasil
-    print("\n" + "="*80)
+
+    results_df = pd.DataFrame(results).sort_values("Accuracy", ascending=False).reset_index(drop=True)
+
+    print("\n" + "=" * 80)
     print("TABEL PERBANDINGAN PERFORMA MODEL")
-    print("="*80)
+    print("=" * 80)
     print(results_df.to_string(index=False))
-    
-    # Simpan hasil ke CSV
-    results_df.to_csv('output/model_evaluation_results.csv', index=False)
-    print(f"\n✓ Hasil evaluasi disimpan ke: output/model_evaluation_results.csv")
-    
+
+    summary_path = OUTPUT_DIR / f"model_evaluation_results_{dataset_label}.csv"
+    results_df.to_csv(summary_path, index=False)
+    print(f"\n✓ Hasil evaluasi disimpan ke: {summary_path}")
+
     return results_df
 
 
@@ -271,57 +228,66 @@ def main():
     """
     Fungsi utama untuk menjalankan evaluasi dan testing prediksi
     """
-    
-    # Load trained models
+    parser = argparse.ArgumentParser(description="Evaluasi model halal/haram")
+    parser.add_argument(
+        "--dataset",
+        choices=["baseline", "augmented"],
+        default="baseline",
+        help="Pilih artefak dataset yang ingin dievaluasi",
+    )
+    args = parser.parse_args()
+
+    dataset_label = args.dataset
+    models_path = MODELS_DIR / f"trained_models_{dataset_label}.joblib"
+    if not models_path.exists():
+        raise FileNotFoundError(f"File model {models_path} tidak ditemukan. Jalankan train_models.py terlebih dahulu.")
+
     print("Loading trained models...")
-    with open('models/trained_models.pkl', 'rb') as f:
-        models = pickle.load(f)
+    models = joblib.load(models_path)
     print(f"✓ {len(models)} models loaded")
-    
-    # Load train-test data
+
+    data_path = MODELS_DIR / f"train_test_data_{dataset_label}.joblib"
     print("\nLoading train-test data...")
-    with open('models/train_test_data.pkl', 'rb') as f:
-        data = pickle.load(f)
-    
-    X_test_tfidf = data['X_test_tfidf']
-    y_test = data['y_test']
+    data = joblib.load(data_path)
+    X_test_tfidf = data["X_test_tfidf"]
+    y_test = data["y_test"]
+    X_train_tfidf = data.get("X_train_tfidf")
+    y_train = data.get("y_train")
     print(f"✓ Test data loaded: {X_test_tfidf.shape[0]} samples")
-    
-    # Load TF-IDF vectorizer
+
+    vectorizer_path = MODELS_DIR / f"tfidf_vectorizer_{dataset_label}.joblib"
     print("\nLoading TF-IDF vectorizer...")
-    with open('models/tfidf_vectorizer.pkl', 'rb') as f:
-        vectorizer = pickle.load(f)
-    print(f"✓ Vectorizer loaded")
-    
-    # Evaluate all models
-    results_df = evaluate_models(models, X_test_tfidf, y_test)
-    
-    # Tentukan model terbaik
-    best_model_name = results_df.iloc[0]['Model']
-    best_accuracy = results_df.iloc[0]['Accuracy']
+    vectorizer = joblib.load(vectorizer_path)
+    print("✓ Vectorizer loaded")
+
+    results_df = evaluate_models(models, X_test_tfidf, y_test, X_train_tfidf, y_train, dataset_label)
+
+    best_model_name = results_df.iloc[0]["Model"]
+    best_accuracy = results_df.iloc[0]["Accuracy"]
     best_model = models[best_model_name]
-    
-    print("\n" + "="*80)
+
+    print("\n" + "=" * 80)
     print(f"🏆 MODEL TERBAIK: {best_model_name}")
-    print(f"   Accuracy: {best_accuracy:.4f} ({best_accuracy*100:.2f}%)")
-    print("="*80)
-    
-    # Test prediction dengan contoh
+    print(f"   Accuracy: {best_accuracy:.4f} ({best_accuracy * 100:.2f}%)")
+    print("=" * 80)
+
     test_prediction_examples(best_model, vectorizer)
-    
-    # Simpan model terbaik secara terpisah
-    with open('models/best_model.pkl', 'wb') as f:
-        pickle.dump({
-            'model': best_model,
-            'model_name': best_model_name,
-            'vectorizer': vectorizer,
-            'accuracy': best_accuracy
-        }, f)
-    print(f"\n✓ Model terbaik disimpan ke: models/best_model.pkl")
-    
-    print("\n" + "="*80)
+
+    best_model_payload = {
+        "model": best_model,
+        "model_name": best_model_name,
+        "vectorizer": vectorizer,
+        "accuracy": best_accuracy,
+        "dataset_label": dataset_label,
+    }
+
+    best_model_path = MODELS_DIR / "best_model.joblib"
+    joblib.dump(best_model_payload, best_model_path)
+    print(f"\n✓ Model terbaik disimpan ke: {best_model_path}")
+
+    print("\n" + "=" * 80)
     print("SELESAI!")
-    print("="*80)
+    print("=" * 80)
 
 
 if __name__ == "__main__":

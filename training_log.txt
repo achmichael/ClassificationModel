@@ -1,0 +1,4 @@
+2025-10-25T22:03:36 | dataset=baseline | model=Multinomial Naive Bayes | train_samples=31829 | train_acc=0.8762 | test_acc=0.8730
+2025-10-25T22:04:05 | dataset=baseline | model=K-Nearest Neighbor | train_samples=31829 | train_acc=0.8670 | test_acc=0.8030
+2025-10-25T22:04:05 | dataset=baseline | model=Support Vector Machine | train_samples=31829 | train_acc=0.9951 | test_acc=0.9902
+2025-10-25T22:04:06 | dataset=baseline | model=Random Forest | train_samples=31829 | train_acc=0.9993 | test_acc=0.9805

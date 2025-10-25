@@ -65,7 +65,7 @@ def check_model_files():
     print("CHECKING MODEL FILES")
     print("="*80)
     
-    model_file = 'models/best_model.pkl'
+    model_file = 'models/best_model.joblib'
     
     if os.path.exists(model_file):
         print(f"\n✓ Model ditemukan: {model_file}")

@@ -1,89 +1,16 @@
+from pathlib import Path
+
 import pandas as pd
-import re
-from nltk.corpus import stopwords
-from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 
-# Download stopwords jika belum ada
-import nltk
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
-
-# Inisialisasi stemmer
-factory = StemmerFactory()
-stemmer = factory.create_stemmer()
-
-# Load stopwords bahasa Indonesia
-stop_words = set(stopwords.words('indonesian'))
-
-# Dictionary untuk normalisasi kata-kata terkait babi dan produk haram
-normalization_dict = {
-    'pork': 'babi',
-    'pig': 'babi',
-    'gelatin': 'babi',
-    'gelatine': 'babi',
-    'lard': 'babi',
-    'bacon': 'babi',
-    'ham': 'babi',
-    'swine': 'babi',
-    'mechanically separated chicken': 'ayam mekanis',
-    'mechanically separated turkey': 'kalkun mekanis',
-    'alcohol': 'alkohol',
-    'wine': 'anggur alkohol',
-    'beer': 'bir',
-    'rum': 'rum',
-    'vodka': 'vodka',
-    'sake': 'sake',
-    'bourbon': 'bourbon',
-    'rennet': 'rennet',
-    'lipase': 'lipase',
-    'pepsin': 'pepsin',
-    'tallow': 'lemak hewan',
-    'animal fat': 'lemak hewan',
-    'beef fat': 'lemak sapi',
-    'chicken fat': 'lemak ayam',
-    'duck fat': 'lemak bebek'
-}
-
-def preprocess_text(text):
-    """
-    Fungsi untuk preprocessing teks
-    """
-    if pd.isna(text):
-        return ""
-    
-    # Ubah ke huruf kecil
-    text = text.lower()
-    
-    # Normalisasi kata-kata asing yang terkait dengan bahan haram
-    for foreign_word, indonesian_word in normalization_dict.items():
-        text = text.replace(foreign_word, indonesian_word)
-    
-    # Hapus tanda baca dan angka (kecuali spasi)
-    text = re.sub(r'[^a-z\s]', '', text)
-    
-    # Hapus spasi berlebih
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Tokenisasi
-    words = text.split()
-    
-    # Hapus stopwords
-    words = [word for word in words if word not in stop_words]
-    
-    # Stemming
-    words = [stemmer.stem(word) for word in words]
-    
-    # Gabungkan kembali
-    clean_text = ' '.join(words)
-    
-    return clean_text
+from text_preprocessing import preprocess_text
 
 
 # 1. Load dataset
+DATA_PATH = Path('data/cleaned_dataset.csv')
+OUTPUT_PATH = Path('data/preprocessed_dataset.csv')
+
 print("Loading dataset...")
-df = pd.read_csv('data/cleaned_dataset.csv')
+df = pd.read_csv(DATA_PATH)
 
 print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
 print(f"\nKolom dataset: {df.columns.tolist()}")
@@ -92,6 +19,7 @@ print(df['label'].value_counts())
 
 # 2. Preprocessing teks
 print("\nMelakukan preprocessing teks...")
+df['text'] = df['text'].fillna('')
 df['clean_text'] = df['text'].apply(preprocess_text)
 
 # 3. Hapus baris dengan clean_text kosong (jika ada)
@@ -110,9 +38,9 @@ for idx, row in df.head().iterrows():
     print("-"*80)
 
 # 5. Simpan hasil preprocessing
-output_file = 'data/preprocessed_dataset.csv'
-df.to_csv(output_file, index=False)
-print(f"\n✓ Hasil preprocessing disimpan ke: {output_file}")
+OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+df.to_csv(OUTPUT_PATH, index=False)
+print(f"\n✓ Hasil preprocessing disimpan ke: {OUTPUT_PATH}")
 
 # Statistik tambahan
 print(f"\nStatistik Dataset:")

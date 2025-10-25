@@ -3,57 +3,28 @@ Script standalone untuk klasifikasi halal-haram dengan input teks atau gambar
 Dapat digunakan tanpa Streamlit untuk testing atau integrasi ke sistem lain
 """
 
-import pandas as pd
 import numpy as np
-import pickle
 import re
 import cv2
 import pytesseract
 from PIL import Image
-from nltk.corpus import stopwords
-from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 import argparse
 import os
+from pathlib import Path
+
+import joblib
+
+from text_preprocessing import preprocess_text
 
 # Konfigurasi Tesseract (uncomment dan sesuaikan jika diperlukan)
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# Dictionary normalisasi
-normalization_dict = {
-    'pork': 'babi',
-    'pig': 'babi',
-    'gelatin': 'babi',
-    'gelatine': 'babi',
-    'lard': 'babi',
-    'bacon': 'babi',
-    'ham': 'babi',
-    'swine': 'babi',
-    'mechanically separated chicken': 'ayam mekanis',
-    'mechanically separated turkey': 'kalkun mekanis',
-    'alcohol': 'alkohol',
-    'wine': 'anggur alkohol',
-    'beer': 'bir',
-    'rum': 'rum',
-    'vodka': 'vodka',
-    'sake': 'sake',
-    'bourbon': 'bourbon',
-    'rennet': 'rennet',
-    'lipase': 'lipase',
-    'pepsin': 'pepsin',
-    'tallow': 'lemak hewan',
-    'animal fat': 'lemak hewan',
-    'beef fat': 'lemak sapi',
-    'chicken fat': 'lemak ayam',
-    'duck fat': 'lemak bebek'
-}
-
 
 class HalalClassifier:
     """
     Class untuk klasifikasi halal-haram dengan support input teks dan gambar
     """
     
-    def __init__(self, model_path='models/best_model.pkl'):
+    def __init__(self, model_path='models/best_model.joblib'):
         """
         Inisialisasi classifier
         
@@ -65,11 +36,6 @@ class HalalClassifier:
         # Load model dan vectorizer
         self.load_model(model_path)
         
-        # Inisialisasi NLP tools
-        factory = StemmerFactory()
-        self.stemmer = factory.create_stemmer()
-        self.stop_words = set(stopwords.words('indonesian'))
-        
         print("✓ HalalClassifier siap digunakan")
         print(f"  Model: {self.model_name}")
         print(f"  Akurasi: {self.accuracy*100:.2f}%\n")
@@ -77,15 +43,15 @@ class HalalClassifier:
     
     def load_model(self, model_path):
         """Load model dan vectorizer dari file"""
+        model_file = Path(model_path)
         try:
-            with open(model_path, 'rb') as f:
-                data = pickle.load(f)
-            
+            data = joblib.load(model_file)
+
             self.model = data['model']
             self.vectorizer = data['vectorizer']
-            self.model_name = data['model_name']
-            self.accuracy = data['accuracy']
-            
+            self.model_name = data.get('model_name', 'Unknown Model')
+            self.accuracy = data.get('accuracy', 0.0)
+
         except FileNotFoundError:
             raise FileNotFoundError(
                 "Model tidak ditemukan! Jalankan train_models.py dan evaluate_and_predict.py terlebih dahulu."
@@ -200,29 +166,7 @@ class HalalClassifier:
         --------
         str : Teks yang sudah diproses
         """
-        if pd.isna(text) or text == "":
-            return ""
-        
-        # Lowercase
-        text = text.lower()
-        
-        # Normalisasi
-        for foreign_word, indonesian_word in normalization_dict.items():
-            text = text.replace(foreign_word, indonesian_word)
-        
-        # Hapus tanda baca dan angka
-        text = re.sub(r'[^a-z\s]', '', text)
-        
-        # Hapus spasi berlebih
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        # Tokenisasi dan hapus stopwords
-        words = [word for word in text.split() if word not in self.stop_words]
-        
-        # Stemming
-        words = [self.stemmer.stem(word) for word in words]
-        
-        return ' '.join(words)
+        return preprocess_text(text)
     
     
     def predict(self, text):
@@ -257,10 +201,8 @@ class HalalClassifier:
         # Confidence score
         try:
             proba = self.model.predict_proba(text_vector)[0]
-            if prediction.lower() == 'halal':
-                confidence = proba[0] if self.model.classes_[0] == 'halal' else proba[1]
-            else:
-                confidence = proba[1] if self.model.classes_[1] == 'haram' else proba[0]
+            class_index = list(self.model.classes_).index(prediction)
+            confidence = proba[class_index]
         except AttributeError:
             try:
                 decision = self.model.decision_function(text_vector)[0]
@@ -369,8 +311,8 @@ def main():
     parser = argparse.ArgumentParser(description='Klasifikasi Halal-Haram dari Teks atau Gambar')
     parser.add_argument('--text', type=str, help='Teks komposisi produk')
     parser.add_argument('--image', type=str, help='Path ke gambar label produk')
-    parser.add_argument('--model', type=str, default='models/best_model.pkl', 
-                       help='Path ke file model (default: models/best_model.pkl)')
+    parser.add_argument('--model', type=str, default='models/best_model.joblib', 
+                       help='Path ke file model (default: models/best_model.joblib)')
     
     args = parser.parse_args()
     
