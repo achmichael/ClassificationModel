@@ -15,6 +15,7 @@ from pathlib import Path
 import joblib
 
 from text_preprocessing import preprocess_text
+from ocr_preprocessing import preprocess_for_ocr
 
 # Konfigurasi Tesseract (uncomment dan sesuaikan jika diperlukan)
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -60,7 +61,8 @@ class HalalClassifier:
     
     def extract_text_from_image(self, image_path):
         """
-        Ekstraksi teks dari gambar menggunakan Tesseract OCR dengan preprocessing advanced
+        Ekstraksi teks dari gambar menggunakan Tesseract OCR dengan preprocessing robust.
+        Menggunakan pipeline preprocessing baru yang dapat menangani berbagai kondisi cahaya.
         
         Parameters:
         -----------
@@ -72,84 +74,104 @@ class HalalClassifier:
         str : Teks hasil OCR
         """
         try:
-            # Baca gambar
+            # Baca gambar dengan OpenCV
             image = cv2.imread(image_path)
             
             if image is None:
                 raise ValueError(f"Tidak dapat membaca gambar: {image_path}")
             
-            # PREPROCESSING ADVANCED UNTUK MENINGKATKAN AKURASI OCR
+            print(f"\n{'='*60}")
+            print(f"MEMPROSES GAMBAR: {os.path.basename(image_path)}")
+            print(f"{'='*60}")
             
-            # 1. Resize gambar jika terlalu kecil (minimum 1000px width)
-            height, width = image.shape[:2]
-            if width < 1000:
-                scale = 1000 / width
-                new_width = 1000
-                new_height = int(height * scale)
-                image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-            
+            # PREPROCESSING MENGGUNAKAN PIPELINE BARU
+            # Pipeline ini secara otomatis:
+            # 1. Resize gambar jika terlalu kecil
             # 2. Konversi ke grayscale
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # 3. Deteksi tipe background (terang/gelap)
+            # 4. Penghilangan noise dengan bilateral filter
+            # 5. Normalisasi kontras dengan CLAHE
+            # 6. Gaussian blur untuk smoothing
+            # 7. Binarisasi dengan adaptive/otsu threshold (otomatis pilih terbaik)
+            # 8. Morphological operations untuk cleanup
             
-            # 3. Denoise SEBELUM thresholding
-            denoised = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
-            
-            # 4. Increase contrast dengan CLAHE
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            contrast_enhanced = clahe.apply(denoised)
-            
-            # 5. Sharpen image
-            kernel_sharpening = np.array([[-1, -1, -1],
-                                          [-1,  9, -1],
-                                          [-1, -1, -1]])
-            sharpened = cv2.filter2D(contrast_enhanced, -1, kernel_sharpening)
-            
-            # 6. Adaptive thresholding
-            binary = cv2.adaptiveThreshold(
-                sharpened, 
-                255, 
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                cv2.THRESH_BINARY, 
-                blockSize=11, 
-                C=2
+            preprocess_result = preprocess_for_ocr(
+                image=image,
+                denoise_method='bilateral',      # Bilateral filter mempertahankan edges
+                threshold_method='both',          # Coba adaptive dan otsu, pilih optimal
+                morphology='open_close',          # Hapus noise kecil dan isi gaps
+                auto_resize=True,
+                min_width=1200                    # Resize ke minimum 1200px untuk OCR lebih akurat
             )
             
-            # 7. Morphological operations
-            kernel = np.ones((1, 1), np.uint8)
-            morph = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-            morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, kernel)
+            # Ambil binary image yang sudah di-preprocess
+            # Binary image ini sudah optimal: teks = putih (255), background = hitam (0)
+            preprocessed_image = preprocess_result['binary']
             
-            # 8. Invert jika perlu
-            if np.mean(morph) > 127:
-                morph = cv2.bitwise_not(morph)
+            print(f"\n{'='*60}")
+            print("MENJALANKAN OCR DENGAN MULTIPLE KONFIGURASI")
+            print(f"{'='*60}")
             
-            # EKSTRAKSI TEKS DENGAN MULTIPLE MODES
+            # EKSTRAKSI TEKS DENGAN MULTIPLE PSM MODES
+            # PSM (Page Segmentation Mode) menentukan bagaimana Tesseract membagi halaman
+            # Kita coba beberapa mode dan pilih yang menghasilkan teks terbanyak
             
-            # Mode 1: PSM 6 (Uniform block of text)
+            # Mode 1: PSM 6 - Uniform block of text (paling umum untuk label produk)
+            print("\n1. Mencoba PSM 6 (Uniform block of text)...")
             custom_config_1 = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
-            text_1 = pytesseract.image_to_string(morph, config=custom_config_1, lang='eng')
+            text_1 = pytesseract.image_to_string(preprocessed_image, config=custom_config_1, lang='eng')
+            print(f"   ✓ Hasil: {len(text_1)} karakter, {len(text_1.split())} kata")
             
-            # Mode 2: PSM 11 (Sparse text)
+            # Mode 2: PSM 11 - Sparse text (untuk teks yang jarang/terpisah)
+            print("\n2. Mencoba PSM 11 (Sparse text)...")
             custom_config_2 = r'--oem 3 --psm 11 -c preserve_interword_spaces=1'
-            text_2 = pytesseract.image_to_string(morph, config=custom_config_2, lang='eng')
+            text_2 = pytesseract.image_to_string(preprocessed_image, config=custom_config_2, lang='eng')
+            print(f"   ✓ Hasil: {len(text_2)} karakter, {len(text_2.split())} kata")
             
-            # Mode 3: PSM 3 (Fully automatic)
+            # Mode 3: PSM 3 - Fully automatic page segmentation
+            print("\n3. Mencoba PSM 3 (Fully automatic)...")
             custom_config_3 = r'--oem 3 --psm 3 -c preserve_interword_spaces=1'
-            text_3 = pytesseract.image_to_string(morph, config=custom_config_3, lang='eng')
+            text_3 = pytesseract.image_to_string(preprocessed_image, config=custom_config_3, lang='eng')
+            print(f"   ✓ Hasil: {len(text_3)} karakter, {len(text_3.split())} kata")
             
-            # Pilih hasil terbaik
-            results = [text_1, text_2, text_3]
+            # Mode 4: PSM 4 - Single column of text
+            print("\n4. Mencoba PSM 4 (Single column)...")
+            custom_config_4 = r'--oem 3 --psm 4 -c preserve_interword_spaces=1'
+            text_4 = pytesseract.image_to_string(preprocessed_image, config=custom_config_4, lang='eng')
+            print(f"   ✓ Hasil: {len(text_4)} karakter, {len(text_4.split())} kata")
+            
+            # Pilih hasil terbaik berdasarkan jumlah kata
+            # Lebih banyak kata = kemungkinan lebih banyak informasi terdeteksi
+            results = [text_1, text_2, text_3, text_4]
             best_text = max(results, key=lambda x: len(x.split()))
+            best_index = results.index(best_text) + 1
             
-            # Clean up hasil OCR
+            print(f"\n{'='*60}")
+            print(f"HASIL TERBAIK: Mode {best_index} dengan {len(best_text.split())} kata")
+            print(f"{'='*60}")
+            
+            # POST-PROCESSING: Clean up hasil OCR
+            # 1. Trim whitespace di awal dan akhir
             cleaned_text = best_text.strip()
-            cleaned_text = re.sub(r'[^\x00-\x7F]+', ' ', cleaned_text)  # Hapus non-ASCII
-            cleaned_text = re.sub(r'\s+', ' ', cleaned_text)  # Normalize spaces
+            
+            # 2. Hapus karakter non-ASCII (karakter aneh hasil OCR error)
+            cleaned_text = re.sub(r'[^\x00-\x7F]+', ' ', cleaned_text)
+            
+            # 3. Normalize whitespace (hapus spasi ganda, tab, newline berlebih)
+            cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+            
+            # 4. Hapus karakter kontrol yang tidak diinginkan
+            cleaned_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_text)
+            
+            print(f"\nTeks final (setelah cleaning): {len(cleaned_text)} karakter")
+            print(f"Preview: {cleaned_text[:200]}..." if len(cleaned_text) > 200 else f"Full text: {cleaned_text}")
             
             return cleaned_text
         
         except Exception as e:
-            print(f"Error saat OCR: {str(e)}")
+            print(f"\n❌ Error saat OCR: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return ""
     
     
