@@ -8,89 +8,11 @@ from PIL import Image
 from pathlib import Path
 
 from text_preprocessing import preprocess_text
-from ocr_preprocessing import preprocess_for_ocr, preprocess_roi_for_ocr
-
-OCR_SIMPLE_CORRECTIONS = {
-    "URBLEACHED": "UNBLEACHED",
-    "HURBLEACHED": "UNBLEACHED",
-    "BLEACHEDD": "BLEACHED",
-    "FLOLJR": "FLOUR",
-    "FLOIIR": "FLOUR",
-    "FI.OUR": "FLOUR",
-    "FLOURR": "FLOUR",
-    "FLOUR-": "FLOUR",
-    "HONONITRATE": "MONONITRATE",
-    "MONONlTRATE": "MONONITRATE",
-    "MONONLTRATE": "MONONITRATE",
-    "THLAMINE": "THIAMINE",
-    "THlAMINE": "THIAMINE",
-    "THlAMlNE": "THIAMINE",
-    "THAMINE": "THIAMINE",
-    "VITAMLN": "VITAMIN",
-    "VITAMlN": "VITAMIN",
-    "VITAM1N": "VITAMIN",
-    "RIBOFLAVLN": "RIBOFLAVIN",
-    "RIBOFLAVlN": "RIBOFLAVIN",
-    "RIBOFLAVINN": "RIBOFLAVIN",
-    "FOLLC": "FOLIC",
-    "FOLIC": "FOLIC",
-    "FOLLC ACID": "FOLIC ACID",
-    "FOLIC ACID": "FOLIC ACID",
-    "L RON": "IRON",
-    "LRON": "IRON",
-    "I RON": "IRON",
-    "lRON": "IRON",
-    "NlACIN": "NIACIN",
-    "NIAClN": "NIACIN",
-    "REDUCED lRON": "REDUCED IRON",
-    "REDUCED LRON": "REDUCED IRON",
-    "REDUCED L RON": "REDUCED IRON",
-    "MlLK": "MILK",
-    "SODlUM": "SODIUM"
-}
+from ocr_preprocessing import preprocess_for_ocr
 
 OCR_REGEX_CORRECTIONS = [
     (re.compile(r'\b([A-Z]{2,})1([A-Z]{2,})\b'), r'\1I\2'),
 ]
-
-SUBINGREDIENT_ANCHORS = (
-    "ENRICHED FLOUR",
-    "ENRICHED WHEAT FLOUR",
-    "UNBLEACHED ENRICHED FLOUR",
-    "BLEACHED ENRICHED FLOUR"
-)
-
-SUBINGREDIENT_TERMINATORS = (
-    "FOLIC ACID",
-    "FOLATE",
-    "VITAMIN B9",
-    "RIBOFLAVIN",
-    "THIAMINE MONONITRATE",
-    "REDUCED IRON",
-    "NIACIN",
-    "WHEAT FLOUR"
-)
-
-SECTION_BOUNDARIES = (
-    " INGREDIENTS",
-    " CONTAINS",
-    " MAY CONTAIN",
-    " ALLERGEN",
-    " ALLERGENS",
-    " DISTRIBUTED",
-    " MANUFACTURED",
-    " PRODUCED",
-    " PACKAGED",
-    " NET ",
-    " BEST",
-    " KEEP",
-    " STORE",
-    " DIRECTIONS",
-    " PREPARED",
-    " WARNING",
-    " NUTRITION"
-)
-
 
 def _apply_regex_corrections(text: str) -> str:
     for pattern, replacement in OCR_REGEX_CORRECTIONS:
@@ -98,82 +20,10 @@ def _apply_regex_corrections(text: str) -> str:
     return text
 
 
-def _apply_simple_corrections(text: str) -> str:
-    for wrong, right in OCR_SIMPLE_CORRECTIONS.items():
-        text = re.sub(rf'\b{re.escape(wrong)}\b', right, text)
-    return text
-
-
 def _normalize_section_headers(text: str) -> str:
     text = re.sub(r'INGREDIENTS\s*(?![:])', 'INGREDIENTS: ', text)
     text = re.sub(r'MAY CONTAIN\s*(?![:])', 'MAY CONTAIN: ', text)
     text = re.sub(r'CONTAINS\s+(?!LESS|UP TO|\d|[:])', 'CONTAINS: ', text)
-    return text
-
-
-def _wrap_enriched_flour_sections(text: str) -> str:
-    for anchor in SUBINGREDIENT_ANCHORS:
-        search_pos = 0
-        while True:
-            idx = text.find(anchor, search_pos)
-            if idx == -1:
-                break
-            after_anchor = idx + len(anchor)
-            
-            # Check if already wrapped in parentheses
-            if text[after_anchor:after_anchor + 2] == ' (':
-                search_pos = after_anchor
-                continue
-
-            # Find stop position first before using it
-            stop_idx = -1
-            for terminator in SUBINGREDIENT_TERMINATORS:
-                term_idx = text.find(terminator, after_anchor)
-                if term_idx != -1:
-                    stop_idx = max(stop_idx, term_idx + len(terminator))
-
-            if stop_idx == -1:
-                boundary_idx = len(text)
-                for boundary in SECTION_BOUNDARIES:
-                    boundary_pos = text.find(boundary, after_anchor)
-                    if boundary_pos != -1 and boundary_pos < boundary_idx:
-                        boundary_idx = boundary_pos
-                stop_idx = boundary_idx
-
-            # Now check if there's already parentheses in the range
-            if '(' in text[after_anchor:stop_idx]:
-                search_pos = after_anchor
-                continue
-
-            tail_match = re.match(r'\s*\([^)]*\)', text[stop_idx:])
-            if tail_match:
-                stop_idx += tail_match.end()
-
-            include_comma = False
-            if stop_idx < len(text) and text[stop_idx] == ',':
-                include_comma = True
-                stop_idx += 1
-
-            segment = text[after_anchor:stop_idx].strip()
-            if segment.startswith('('):
-                search_pos = after_anchor
-                continue
-
-            if segment:
-                segment = segment.strip(', ')
-                insertion = f" ({segment})"
-                next_slice = text[stop_idx:]
-                if include_comma:
-                    insertion += ','
-                else:
-                    next_char = next_slice.lstrip()[:1]
-                    if next_char and next_char not in {'.', ';', ')', ','}:
-                        insertion += ','
-                text = text[:after_anchor] + insertion + text[stop_idx:]
-                search_pos = after_anchor + len(insertion)
-            else:
-                search_pos = after_anchor
-
     return text
 
 
@@ -208,7 +58,6 @@ def clean_ocr_text(raw_text: str) -> str:
     text = text.upper()
 
     text = _apply_regex_corrections(text)
-    text = _apply_simple_corrections(text)
 
     text = re.sub(r'\bAI\b', '(', text)
     text = re.sub(r'\bA1\b', '(', text)
@@ -220,7 +69,6 @@ def clean_ocr_text(raw_text: str) -> str:
 
     text = _remove_consecutive_duplicates(text)
     text = _normalize_section_headers(text)
-    text = _wrap_enriched_flour_sections(text)
     text = _tidy_punctuation_and_spacing(text)
 
     if text and not text.endswith('.'):
