@@ -49,13 +49,7 @@ OCR_SIMPLE_CORRECTIONS = {
 }
 
 OCR_REGEX_CORRECTIONS = [
-    (re.compile(r'(?<=\w)1(?=\w)'), 'I'),
-    (re.compile(r'(?<=\w)0(?=\w)'), 'O'),
-    (re.compile(r'(?<=\w)5(?=\w)'), 'S'),
-    (re.compile(r'(?<=\w)8(?=\w)'), 'B'),
-    (re.compile(r'(?<=\w)6(?=\w)'), 'G'),
-    (re.compile(r'(?<=\w)4(?=\w)'), 'A'),
-    (re.compile(r'(?<=\w)3(?=\w)'), 'E')
+    (re.compile(r'(?<=\b[A-Z]{2,})1(?=[A-Z]{2,}\b)'), 'I'),
 ]
 
 SUBINGREDIENT_ANCHORS = (
@@ -124,6 +118,8 @@ def _wrap_enriched_flour_sections(text: str) -> str:
             if idx == -1:
                 break
             after_anchor = idx + len(anchor)
+            if '(' in text[after_anchor:stop_idx]:
+                continue
             if text[after_anchor:after_anchor + 2] == ' (':
                 search_pos = after_anchor
                 continue
@@ -190,21 +186,7 @@ def _remove_consecutive_duplicates(text: str) -> str:
 
 
 def _tidy_punctuation_and_spacing(text: str) -> str:
-    text = text.replace('[', '(').replace(']', ')')
-    text = text.replace('{', '(').replace('}', ')')
-    text = re.sub(r'\s*,\s*', ', ', text)
-    text = re.sub(r'\s*;\s*', '; ', text)
-    text = re.sub(r'\s*\(\s*', ' (', text)
-    text = re.sub(r'\s*\)\s*', ') ', text)
-    text = re.sub(r',\s*,+', ', ', text)
-    text = re.sub(r'\(\s*,', '(', text)
-    text = re.sub(r',\s*\)', ')', text)
-    text = re.sub(r'\s+', ' ', text)
-    text = text.replace('( ', '(').replace(' )', ')')
-    text = re.sub(r'\)(?=[A-Z0-9])', r') ', text)
-    text = re.sub(r'\s+([,.;)])', r'\1', text)
-    text = re.sub(r'([(:,])\s+', r'\1 ', text)
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'(?<![A-Z])\s+([,.;)])', r'\1', text)
     return text.strip(' ,;')
 
 
@@ -269,11 +251,9 @@ def extract_text_from_image(image_file, return_debug=False):
 
         binary_for_ocr = cv2.adaptiveThreshold(
             enhanced,
+            0,
             255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            31,
-            3
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
         )
 
         binary_inv = cv2.adaptiveThreshold(
@@ -298,7 +278,7 @@ def extract_text_from_image(image_file, return_debug=False):
             x, y, w, h = cv2.boundingRect(cnt)
             area = w * h
             aspect_ratio = w / float(h) if h else 0.0
-            if area < 0.015 * image_area:
+            if area < 0.005 * image_area:
                 continue
             if w < 60 or h < 60:
                 continue
@@ -340,8 +320,8 @@ def extract_text_from_image(image_file, return_debug=False):
         def run_ocr(image_gray):
             configs = [
                 r'--oem 3 --psm 6 -c preserve_interword_spaces=1',
-                r'--oem 3 --psm 4 -c preserve_interword_spaces=1',
-                r'--oem 3 --psm 11 -c preserve_interword_spaces=1'
+                r'--oem 3 --psm 3 -c preserve_interword_spaces=1',
+                r'--oem 3 --psm 12 -c preserve_interword_spaces=1'
             ]
             candidates = [
                 pytesseract.image_to_string(image_gray, config=cfg, lang='eng')
@@ -379,8 +359,10 @@ def extract_text_from_image(image_file, return_debug=False):
             cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 180, 0), 2)
 
         debug_data['overlay'] = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-
-        combined_text = '\n'.join(dict.fromkeys(texts)).strip()
+        
+        regions.sort(key=lambda r: (r[1], r[0]))
+        
+        combined_text = '\n'.join([t for t in texts if t.strip()])
 
         if not combined_text:
             fallback = run_ocr(cv2.bitwise_not(binary_for_ocr))
