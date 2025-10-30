@@ -33,7 +33,8 @@ models/
 *.checkpoint
 logs/
 runs/
-
+*.traineddata
+*.lstm
 # ---- Jupyter Notebook ----
 .ipynb_checkpoints
 *.ipynb_convert/

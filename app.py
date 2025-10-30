@@ -8,7 +8,7 @@ from PIL import Image
 from pathlib import Path
 
 from text_preprocessing import preprocess_text
-from ocr_preprocessing import preprocess_for_ocr
+from ocr_simple import run_ocr_from_ui, preprocess_for_cli_match
 
 OCR_REGEX_CORRECTIONS = [
     (re.compile(r'\b([A-Z]{2,})1([A-Z]{2,})\b'), r'\1I\2'),
@@ -78,294 +78,53 @@ def clean_ocr_text(raw_text: str) -> str:
 
 def extract_text_from_image(image_file, return_debug=False):
     """
-    Ekstraksi teks dari gambar dengan preprocessing robust untuk berbagai kondisi cahaya.
-    Menggunakan pipeline preprocessing baru yang dapat menangani background terang maupun gelap.
+    Ekstraksi teks dari gambar dengan preprocessing minimal untuk match CLI behavior.
+    Menggunakan simplified pipeline yang produces hasil identical dengan:
+        tesseract input.png stdout -l eng --psm 6
     """
     try:
         if hasattr(image_file, "seek"):
             image_file.seek(0)
-        pil_image = Image.open(image_file).convert("RGB")
-        img_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-
-        height, width = img_bgr.shape[:2]
-        debug_data = {
-            'original': cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB),
-            'preprocessed': None,
-            'overlay': None,
-            'regions': [],
-            'is_dark_background': False
-        }
-
-        print("=" * 60)
-        print("MEMULAI PREPROCESSING OCR")
-        print("=" * 60)
         
-        # Gunakan pipeline preprocessing baru yang lebih robust
-        preprocess_result = preprocess_for_ocr(
-            image=img_bgr,
-            denoise_method='bilateral',      # Bilateral filter untuk preserve edges
-            threshold_method='both',          # Coba adaptive dan otsu, pilih yang terbaik
-            morphology='open_close',          # Cleanup noise dan isi gaps
-            auto_resize=True,
-            min_width=1200
-        )
+        # Read image bytes
+        image_bytes = image_file.read()
         
-        # Ambil hasil preprocessing
-        binary_for_ocr = preprocess_result['binary']
-        enhanced = preprocess_result['grayscale']
-        is_light_background = preprocess_result['is_light_background']
-        mean_intensity = preprocess_result['mean_intensity']
+        # Use the simplified OCR function
+        text = run_ocr_from_ui(image_bytes)
         
-        # Update debug data
-        is_dark_background = not is_light_background
-        debug_data['is_dark_background'] = is_dark_background
-        
-        # Jika gambar di-resize, update img_bgr
-        if preprocess_result['processed_size'] != preprocess_result['original_size']:
-            new_width, new_height = preprocess_result['processed_size']
-            img_bgr = cv2.resize(img_bgr, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-            debug_data['original'] = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-        # Binary untuk deteksi region - gunakan hasil preprocessing yang sama
-        binary_inv = binary_for_ocr.copy()
-
-        # Koneksi morfologi untuk menggabungkan karakter
-        connect_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
-        connected = cv2.morphologyEx(binary_inv, cv2.MORPH_CLOSE, connect_kernel, iterations=2)
-        
-        # Dilasi untuk memperbesar region
-        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        connected = cv2.dilate(connected, dilate_kernel, iterations=1)
-
-        debug_data['preprocessed'] = cv2.cvtColor(binary_for_ocr, cv2.COLOR_GRAY2RGB)
-        debug_data['connected'] = cv2.cvtColor(connected, cv2.COLOR_GRAY2RGB)
-
-        # Deteksi contours
-        contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        image_area = img_bgr.shape[0] * img_bgr.shape[1]
-        regions = []
-
-        print(f"Found {len(contours)} contours")
-
-        # Filter regions dengan threshold yang lebih rendah
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            area = w * h
-            aspect_ratio = w / float(h) if h else 0.0
-            
-            # Filter: area minimum sangat kecil
-            if area < 0.00005 * image_area:
-                continue
-            
-            # Filter: ukuran minimum sangat kecil
-            if w < 20 or h < 15:
-                continue
-            
-            # Filter: aspect ratio sangat lebar
-            if aspect_ratio > 50 or aspect_ratio < 0.05:
-                continue
-
-            # Check white pixel ratio di region
-            roi_mask = binary_inv[y:y + h, x:x + w]
-            if roi_mask.size == 0:
-                continue
-                
-            white_ratio = np.mean(roi_mask / 255.0)
-            
-            # Filter: white ratio minimum
-            if white_ratio < 0.02:
-                continue
-
-            regions.append((x, y, w, h))
-            print(f"  ✓ Region: ({x},{y}) {w}x{h}, area={area}, aspect={aspect_ratio:.2f}, white={white_ratio:.3f}")
-
-        # Jika tidak ada region terdeteksi, gunakan seluruh gambar
-        if not regions:
-            print("⚠️ Tidak ada region terdeteksi, menggunakan seluruh gambar")
-            regions = [(0, 0, img_bgr.shape[1], img_bgr.shape[0])]
-
-        # Sort regions by area (largest first)
-        regions.sort(key=lambda r: r[2] * r[3], reverse=True)
-        
-        # Merge overlapping regions
-        merged_regions = []
-        for rect in regions:
-            x, y, w, h = rect
-            merged = False
-            for idx, (mx, my, mw, mh) in enumerate(merged_regions):
-                # Check if rectangles overlap
-                if not (x > mx + mw or x + w < mx or y > my + mh or y + h < my):
-                    nx = min(x, mx)
-                    ny = min(y, my)
-                    nw = max(x + w, mx + mw) - nx
-                    nh = max(y + h, my + mh) - ny
-                    merged_regions[idx] = (nx, ny, nw, nh)
-                    merged = True
-                    break
-            if not merged:
-                merged_regions.append(rect)
-
-        # Ambil maksimal 8 region terbesar
-        regions = merged_regions[:8]
-        print(f"After merging: {len(regions)} regions")
-
-        overlay = img_bgr.copy()
-        texts = []
-
-        def run_ocr(image_gray, invert=False):
-            """
-            Run OCR dengan multiple konfigurasi untuk mendapatkan hasil terbaik.
-            Mencoba berbagai page segmentation mode (PSM) dan OEM.
-            """
-            if invert:
-                image_gray = cv2.bitwise_not(image_gray)
-            
-            # Konfigurasi OCR dengan berbagai PSM mode:
-            # PSM 6 = Uniform block of text (paling umum untuk label produk)
-            # PSM 3 = Fully automatic page segmentation
-            # PSM 11 = Sparse text (untuk teks yang jarang/terpisah)
-            # PSM 4 = Single column of text
-            configs = [
-                r'--oem 3 --psm 6',   # LSTM + uniform block (terbaik untuk paragraf)
-                r'--oem 3 --psm 3',   # LSTM + auto (fleksibel)
-                r'--oem 3 --psm 11',  # LSTM + sparse text
-                r'--oem 3 --psm 4',   # LSTM + single column
-                r'--oem 1 --psm 6',   # Tesseract legacy + uniform block (backup)
-            ]
-            
-            best_text = ""
-            max_alnum = 0
-            
-            for cfg in configs:
-                try:
-                    text = pytesseract.image_to_string(image_gray, config=cfg, lang='eng')
-                    text = text.strip()
-                    alnum_count = sum(ch.isalnum() for ch in text)
-                    if alnum_count > max_alnum:
-                        max_alnum = alnum_count
-                        best_text = text
-                except Exception as e:
-                    continue
-            
-            return best_text
-
-        # Process setiap region
-        for idx, (x, y, w, h) in enumerate(regions, 1):
-            # Tambah margin untuk memastikan tidak ada teks yang terpotong
-            margin_w = int(w * 0.03)
-            margin_h = int(h * 0.03)
-            x0 = max(x - margin_w, 0)
-            y0 = max(y - margin_h, 0)
-            x1 = min(x + w + margin_w, binary_for_ocr.shape[1])
-            y1 = min(y + h + margin_h, binary_for_ocr.shape[0])
-
-            # Extract ROI dari binary image yang sudah di-preprocess
-            roi_binary = binary_for_ocr[y0:y1, x0:x1]
-            
-            if roi_binary.size == 0:
-                continue
-            
-            # Coba OCR langsung dan inverted (untuk handling edge cases)
-            text_normal = run_ocr(roi_binary, invert=False)
-            text_inverted = run_ocr(roi_binary, invert=True)
-            
-            # Pilih yang lebih banyak alphanumeric characters
-            alnum_normal = sum(ch.isalnum() for ch in text_normal)
-            alnum_inverted = sum(ch.isalnum() for ch in text_inverted)
-            
-            text_candidate = text_normal if alnum_normal >= alnum_inverted else text_inverted
-            used_invert = alnum_inverted > alnum_normal
-
-            # Clean text: hapus karakter yang tidak valid
-            cleaned = re.sub(r'[^\nA-Za-z0-9%.,:;()\- ]+', ' ', text_candidate)
-            cleaned_lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-            cleaned_text = '\n'.join(cleaned_lines)
-
-            if cleaned_text and len(cleaned_text.strip()) >= 3:
-                texts.append(cleaned_text)
-                print(f"✓ Region {idx}: {len(cleaned_text)} chars (inverted={used_invert})")
-            else:
-                print(f"✗ Region {idx}: Empty or too short")
-
-            # Debug info
-            region_display = cv2.cvtColor(roi_binary, cv2.COLOR_GRAY2RGB)
-            debug_data['regions'].append({
-                'index': idx,
-                'bbox': (x0, y0, x1 - x0, y1 - y0),
-                'image': region_display,
-                'text': cleaned_text,
-                'inverted': used_invert
-            })
-
-            # Draw rectangle
-            color = (0, 255, 0) if cleaned_text else (255, 0, 0)
-            cv2.rectangle(overlay, (x0, y0), (x1, y1), color, 3)
-            cv2.putText(overlay, f"R{idx}", (x0, y0-5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-
-        debug_data['overlay'] = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-
-        # Combine texts
-        combined_text = '\n'.join([t for t in texts if t.strip()])
-
-        # Fallback: jika hasil terlalu sedikit, coba full image OCR
-        if not combined_text or len(combined_text.strip()) < 20:
-            print("⚠️ Hasil region terlalu pendek, mencoba fallback full OCR")
-            
-            # Coba dengan berbagai preprocessing
-            fallback_candidates = []
-            
-            # 1. Binary original
-            text1 = run_ocr(binary_for_ocr, invert=False)
-            fallback_candidates.append(text1)
-            
-            # 2. Binary inverted
-            text2 = run_ocr(binary_for_ocr, invert=True)
-            fallback_candidates.append(text2)
-            
-            # 3. Gray original
-            text3 = run_ocr(enhanced, invert=False)
-            fallback_candidates.append(text3)
-            
-            # 4. Gray inverted
-            text4 = run_ocr(enhanced, invert=True)
-            fallback_candidates.append(text4)
-            
-            # Pilih fallback terbaik
-            best_fallback = max(fallback_candidates, key=lambda t: sum(ch.isalnum() for ch in t))
-            
-            if best_fallback:
-                fallback_clean = re.sub(r'[^\nA-Za-z0-9%.,:;()\- ]+', ' ', best_fallback)
-                fallback_lines = [line.strip() for line in fallback_clean.splitlines() if line.strip()]
-                combined_text = '\n'.join(fallback_lines)
-                print(f"✓ Fallback OCR: {len(combined_text)} chars")
-
-        # Clean OCR text dengan fungsi pembersih
-        cleaned_text = clean_ocr_text(combined_text)
-        if not cleaned_text or len(cleaned_text.strip()) < 3:
-            cleaned_text = combined_text
-
-        debug_data['raw_text'] = combined_text
-        debug_data['clean_text'] = cleaned_text
-        debug_data['background_type'] = 'Dark' if is_dark_background else 'Light'
-
-        print(f"✓ Final text length: {len(cleaned_text)} chars")
-        if cleaned_text:
-            print(f"Preview: {cleaned_text[:100]}...")
-
+        # Debug data (minimal)
         if return_debug:
-            return cleaned_text, debug_data
-
-        return cleaned_text
+            image_array = np.frombuffer(image_bytes, dtype=np.uint8)
+            img_bgr = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            preprocessed_image = preprocess_for_cli_match(img_bgr)
+            
+            debug_data = {
+                'original': cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB),
+                'preprocessed': cv2.cvtColor(preprocessed_image, cv2.COLOR_GRAY2RGB),
+                'text_length': len(text),
+                'word_count': len(text.split())
+            }
+            return text, debug_data
+        
+        return text
 
     except Exception as e:
+        print(f"Error during OCR: {e}")
         import traceback
-        error_msg = f"Error saat ekstraksi teks dari gambar: {str(e)}\n{traceback.format_exc()}"
-        print(error_msg)
+        traceback.print_exc()
         if return_debug:
-            return "", {'error': error_msg}
-        st.error(error_msg)
+            return "", {'error': str(e)}
         return ""
+
+
+def clean_ocr_text(text):
+    """Clean OCR text output"""
+    if not text:
+        return ""
+    # Just basic cleanup
+    text = text.strip()
+    return text
+
 
 @st.cache_resource
 def load_model_and_vectorizer():

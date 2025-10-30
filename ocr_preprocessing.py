@@ -77,9 +77,8 @@ def remove_noise(gray_image: np.ndarray, method: str = 'bilateral') -> np.ndarra
     gray_image : np.ndarray
         Gambar grayscale
     method : str
-        Metode denoising: 'bilateral', 'gaussian', atau 'nlmeans'
-        - bilateral: Bagus untuk preserve edges, cepat
-        - gaussian: Simple blur, sangat cepat
+        Metode denoising: 'bilateral' atau 'nlmeans'
+        - bilateral: Bagus untuk preserve edges tanpa distorsi karakter, cepat
         - nlmeans: Paling bagus tapi lambat
     
     Returns:
@@ -89,12 +88,9 @@ def remove_noise(gray_image: np.ndarray, method: str = 'bilateral') -> np.ndarra
     """
     if method == 'bilateral':
         # Bilateral filter: Smooth noise tapi preserve edges
-        # Parameters: diameter=11, sigmaColor=17, sigmaSpace=17
-        denoised = cv2.bilateralFilter(gray_image, 11, 17, 17)
-        
-    elif method == 'gaussian':
-        # Gaussian blur: Simple dan cepat
-        denoised = cv2.GaussianBlur(gray_image, (5, 5), 0)
+        # Lebih baik dari Gaussian blur karena tidak merusak struktur karakter
+        # Parameters: diameter=9, sigmaColor=75, sigmaSpace=75
+        denoised = cv2.bilateralFilter(gray_image, 9, 75, 75)
         
     elif method == 'nlmeans':
         # Non-local means denoising: Paling bagus tapi lambat
@@ -103,7 +99,7 @@ def remove_noise(gray_image: np.ndarray, method: str = 'bilateral') -> np.ndarra
                                             searchWindowSize=21)
     else:
         # Default: bilateral
-        denoised = cv2.bilateralFilter(gray_image, 11, 17, 17)
+        denoised = cv2.bilateralFilter(gray_image, 9, 75, 75)
     
     return denoised
 
@@ -116,6 +112,9 @@ def apply_adaptive_threshold(gray_image: np.ndarray,
     Menerapkan adaptive thresholding yang disesuaikan dengan tipe background.
     Adaptive threshold lebih baik daripada global threshold untuk gambar dengan
     pencahayaan tidak merata.
+    
+    Catatan: Fungsi ini tidak melakukan inversion tambahan. Output langsung
+    disesuaikan agar teks = putih (255) dan background = hitam (0) untuk OCR.
     
     Parameters:
     -----------
@@ -133,7 +132,7 @@ def apply_adaptive_threshold(gray_image: np.ndarray,
     Returns:
     --------
     np.ndarray
-        Binary image (0 atau 255)
+        Binary image dengan teks putih (255) pada background hitam (0)
     """
     # Pastikan block_size ganjil
     if block_size % 2 == 0:
@@ -141,27 +140,24 @@ def apply_adaptive_threshold(gray_image: np.ndarray,
     
     if is_light_background:
         # Background terang (putih), teks gelap (hitam)
-        # Gunakan THRESH_BINARY untuk menghasilkan teks hitam (0) di background putih (255)
-        # Kemudian invert agar teks jadi putih (255) untuk OCR
-        binary = cv2.adaptiveThreshold(
-            gray_image,
-            255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            block_size,
-            C
-        )
-        # Invert: teks hitam → putih, background putih → hitam
-        binary = cv2.bitwise_not(binary)
-        
-    else:
-        # Background gelap, teks terang
         # Gunakan THRESH_BINARY_INV untuk langsung mendapat teks putih
         binary = cv2.adaptiveThreshold(
             gray_image,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
+            block_size,
+            C
+        )
+        
+    else:
+        # Background gelap, teks terang
+        # Gunakan THRESH_BINARY untuk langsung mendapat teks putih
+        binary = cv2.adaptiveThreshold(
+            gray_image,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
             block_size,
             C
         )
@@ -175,6 +171,9 @@ def apply_otsu_threshold(gray_image: np.ndarray,
     Menerapkan Otsu's thresholding untuk binarisasi otomatis.
     Otsu's method secara otomatis menentukan threshold optimal berdasarkan histogram.
     
+    Catatan: Fungsi ini tidak melakukan inversion tambahan atau blur.
+    Output langsung disesuaikan agar teks = putih (255) dan background = hitam (0).
+    
     Parameters:
     -----------
     gray_image : np.ndarray
@@ -185,26 +184,24 @@ def apply_otsu_threshold(gray_image: np.ndarray,
     Returns:
     --------
     np.ndarray
-        Binary image (0 atau 255)
+        Binary image dengan teks putih (255) pada background hitam (0)
     """
     if is_light_background:
-        # Background terang: gunakan THRESH_BINARY + OTSU, lalu invert
-        _, binary = cv2.threshold(
-            gray_image,
-            0,
-            255,
-            cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        # Invert agar teks jadi putih
-        binary = cv2.bitwise_not(binary)
-        
-    else:
-        # Background gelap: gunakan THRESH_BINARY_INV + OTSU
+        # Background terang: gunakan THRESH_BINARY_INV + OTSU untuk langsung mendapat teks putih
         _, binary = cv2.threshold(
             gray_image,
             0,
             255,
             cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+        
+    else:
+        # Background gelap: gunakan THRESH_BINARY + OTSU untuk langsung mendapat teks putih
+        _, binary = cv2.threshold(
+            gray_image,
+            0,
+            255,
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
     
     return binary
@@ -269,22 +266,22 @@ def preprocess_for_ocr(image: np.ndarray,
     Pipeline preprocessing lengkap untuk OCR.
     Fungsi ini menggabungkan semua langkah preprocessing untuk hasil OCR optimal.
     
-    Pipeline:
+    Pipeline (Optimized):
     1. Resize gambar jika terlalu kecil (opsional)
     2. Konversi ke grayscale
     3. Deteksi tipe background (terang/gelap)
-    4. Penghilangan noise (bilateral/gaussian/nlmeans)
+    4. Penghilangan noise dengan bilateralFilter (preserves fine text structure)
     5. Normalisasi kontras (CLAHE)
-    6. Gaussian blur ringan untuk smoothing
-    7. Binarisasi dengan adaptive/otsu threshold
-    8. Morphological operations untuk cleanup
+    6. Binarisasi dengan adaptive/otsu threshold (tanpa inversion berlebihan)
+    7. Morphological operations untuk cleanup
     
     Parameters:
     -----------
     image : np.ndarray
         Input image (BGR atau RGB format dari cv2.imread atau PIL)
     denoise_method : str
-        Metode denoising: 'bilateral', 'gaussian', atau 'nlmeans'
+        Metode denoising: 'bilateral' atau 'nlmeans'
+        Recommended: 'bilateral' untuk preservasi struktur teks yang baik
     threshold_method : str
         Metode thresholding: 'adaptive', 'otsu', atau 'both'
         - adaptive: Lebih bagus untuk pencahayaan tidak merata
@@ -342,7 +339,9 @@ def preprocess_for_ocr(image: np.ndarray,
     bg_type = "TERANG (putih)" if is_light_bg else "GELAP (hitam)"
     print(f"✓ Background detected: {bg_type} (intensity: {mean_intensity:.1f})")
     
-    # Langkah 4: Penghilangan noise
+    # Langkah 4: Penghilangan noise dengan bilateral filter
+    # Bilateral filter mempertahankan edges dan fine text structure
+    # tanpa distorsi karakter yang terjadi pada Gaussian blur
     denoised = remove_noise(gray, method=denoise_method)
     print(f"✓ Noise removed using {denoise_method} filter")
     
@@ -350,27 +349,23 @@ def preprocess_for_ocr(image: np.ndarray,
     enhanced = normalize_contrast(denoised, clip_limit=2.0)
     print("✓ Contrast normalized with CLAHE")
     
-    # Langkah 6: Gaussian blur ringan untuk smoothing final
-    smoothed = cv2.GaussianBlur(enhanced, (5, 5), 0)
-    print("✓ Final smoothing applied")
+    result['grayscale'] = enhanced
     
-    result['grayscale'] = smoothed
-    
-    # Langkah 7: Binarisasi dengan threshold
+    # Langkah 6: Binarisasi dengan threshold
     if threshold_method == 'adaptive':
-        binary = apply_adaptive_threshold(smoothed, is_light_bg, block_size=31, C=5)
+        binary = apply_adaptive_threshold(enhanced, is_light_bg, block_size=31, C=5)
         result['threshold_method_used'] = 'adaptive'
         print("✓ Applied adaptive threshold")
         
     elif threshold_method == 'otsu':
-        binary = apply_otsu_threshold(smoothed, is_light_bg)
+        binary = apply_otsu_threshold(enhanced, is_light_bg)
         result['threshold_method_used'] = 'otsu'
         print("✓ Applied Otsu threshold")
         
     elif threshold_method == 'both':
         # Coba kedua metode dan pilih yang menghasilkan lebih banyak teks
-        binary_adaptive = apply_adaptive_threshold(smoothed, is_light_bg, block_size=31, C=5)
-        binary_otsu = apply_otsu_threshold(smoothed, is_light_bg)
+        binary_adaptive = apply_adaptive_threshold(enhanced, is_light_bg, block_size=31, C=5)
+        binary_otsu = apply_otsu_threshold(enhanced, is_light_bg)
         
         # Hitung white pixel ratio (asumsi: teks = putih)
         white_adaptive = np.sum(binary_adaptive == 255) / binary_adaptive.size
@@ -393,11 +388,11 @@ def preprocess_for_ocr(image: np.ndarray,
     
     else:
         # Default: adaptive
-        binary = apply_adaptive_threshold(smoothed, is_light_bg, block_size=31, C=5)
+        binary = apply_adaptive_threshold(enhanced, is_light_bg, block_size=31, C=5)
         result['threshold_method_used'] = 'adaptive'
         print("✓ Applied adaptive threshold (default)")
     
-    # Langkah 8: Morphological operations untuk cleanup
+    # Langkah 7: Morphological operations untuk cleanup
     if morphology != 'none':
         binary = apply_morphological_operations(binary, operation=morphology, kernel_size=(2, 2))
         print(f"✓ Applied morphological operation: {morphology}")
@@ -438,8 +433,8 @@ def preprocess_roi_for_ocr(roi: np.ndarray,
     else:
         gray = roi.copy()
     
-    # Denoise ringan
-    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
+    # Denoise dengan bilateral filter untuk preserve text structure
+    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
     
     # CLAHE untuk kontras
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))

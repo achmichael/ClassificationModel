@@ -15,7 +15,7 @@ from pathlib import Path
 import joblib
 
 from text_preprocessing import preprocess_text
-from ocr_preprocessing import preprocess_for_ocr
+from ocr_simple import preprocess_for_cli_match
 
 # Konfigurasi Tesseract (uncomment dan sesuaikan jika diperlukan)
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -84,86 +84,33 @@ class HalalClassifier:
             print(f"MEMPROSES GAMBAR: {os.path.basename(image_path)}")
             print(f"{'='*60}")
             
-            # PREPROCESSING MENGGUNAKAN PIPELINE BARU
-            # Pipeline ini secara otomatis:
-            # 1. Resize gambar jika terlalu kecil
-            # 2. Konversi ke grayscale
-            # 3. Deteksi tipe background (terang/gelap)
-            # 4. Penghilangan noise dengan bilateral filter
-            # 5. Normalisasi kontras dengan CLAHE
-            # 6. Gaussian blur untuk smoothing
-            # 7. Binarisasi dengan adaptive/otsu threshold (otomatis pilih terbaik)
-            # 8. Morphological operations untuk cleanup
+            # SIMPLIFIED PREPROCESSING TO MATCH CLI BEHAVIOR
+            # Minimal processing: grayscale → bilateral filter → upscale if needed → optional invert
+            # NO thresholding, NO morphology, NO CLAHE
+            # This produces results identical to: tesseract input.png stdout -l eng --psm 6
             
-            preprocess_result = preprocess_for_ocr(
-                image=image,
-                denoise_method='bilateral',      # Bilateral filter mempertahankan edges
-                threshold_method='both',          # Coba adaptive dan otsu, pilih optimal
-                morphology='open_close',          # Hapus noise kecil dan isi gaps
-                auto_resize=True,
-                min_width=1200                    # Resize ke minimum 1200px untuk OCR lebih akurat
+            preprocessed_image = preprocess_for_cli_match(image)
+            
+            print(f"\n{'='*60}")
+            print("MENJALANKAN OCR DENGAN TESSERACT")
+            print(f"{'='*60}")
+            
+            # EKSTRAKSI TEKS DENGAN TESSERACT OCR
+            # Exact CLI configuration for consistency
+            print("\nEkstraksi teks menggunakan Tesseract...")
+            text = pytesseract.image_to_string(
+                preprocessed_image,
+                lang='eng',
+                config='--psm 6'
             )
             
-            # Ambil binary image yang sudah di-preprocess
-            # Binary image ini sudah optimal: teks = putih (255), background = hitam (0)
-            preprocessed_image = preprocess_result['binary']
-            
-            print(f"\n{'='*60}")
-            print("MENJALANKAN OCR DENGAN MULTIPLE KONFIGURASI")
+            print(f"✓ Hasil: {len(text)} karakter, {len(text.split())} kata")
             print(f"{'='*60}")
             
-            # EKSTRAKSI TEKS DENGAN MULTIPLE PSM MODES
-            # PSM (Page Segmentation Mode) menentukan bagaimana Tesseract membagi halaman
-            # Kita coba beberapa mode dan pilih yang menghasilkan teks terbanyak
+            # POST-PROCESSING: Light cleanup only
+            cleaned_text = text.strip()
             
-            # Mode 1: PSM 6 - Uniform block of text (paling umum untuk label produk)
-            print("\n1. Mencoba PSM 6 (Uniform block of text)...")
-            custom_config_1 = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
-            text_1 = pytesseract.image_to_string(preprocessed_image, config=custom_config_1, lang='eng')
-            print(f"   ✓ Hasil: {len(text_1)} karakter, {len(text_1.split())} kata")
-            
-            # Mode 2: PSM 11 - Sparse text (untuk teks yang jarang/terpisah)
-            print("\n2. Mencoba PSM 11 (Sparse text)...")
-            custom_config_2 = r'--oem 3 --psm 11 -c preserve_interword_spaces=1'
-            text_2 = pytesseract.image_to_string(preprocessed_image, config=custom_config_2, lang='eng')
-            print(f"   ✓ Hasil: {len(text_2)} karakter, {len(text_2.split())} kata")
-            
-            # Mode 3: PSM 3 - Fully automatic page segmentation
-            print("\n3. Mencoba PSM 3 (Fully automatic)...")
-            custom_config_3 = r'--oem 3 --psm 3 -c preserve_interword_spaces=1'
-            text_3 = pytesseract.image_to_string(preprocessed_image, config=custom_config_3, lang='eng')
-            print(f"   ✓ Hasil: {len(text_3)} karakter, {len(text_3.split())} kata")
-            
-            # Mode 4: PSM 4 - Single column of text
-            print("\n4. Mencoba PSM 4 (Single column)...")
-            custom_config_4 = r'--oem 3 --psm 4 -c preserve_interword_spaces=1'
-            text_4 = pytesseract.image_to_string(preprocessed_image, config=custom_config_4, lang='eng')
-            print(f"   ✓ Hasil: {len(text_4)} karakter, {len(text_4.split())} kata")
-            
-            # Pilih hasil terbaik berdasarkan jumlah kata
-            # Lebih banyak kata = kemungkinan lebih banyak informasi terdeteksi
-            results = [text_1, text_2, text_3, text_4]
-            best_text = max(results, key=lambda x: len(x.split()))
-            best_index = results.index(best_text) + 1
-            
-            print(f"\n{'='*60}")
-            print(f"HASIL TERBAIK: Mode {best_index} dengan {len(best_text.split())} kata")
-            print(f"{'='*60}")
-            
-            # POST-PROCESSING: Clean up hasil OCR
-            # 1. Trim whitespace di awal dan akhir
-            cleaned_text = best_text.strip()
-            
-            # 2. Hapus karakter non-ASCII (karakter aneh hasil OCR error)
-            cleaned_text = re.sub(r'[^\x00-\x7F]+', ' ', cleaned_text)
-            
-            # 3. Normalize whitespace (hapus spasi ganda, tab, newline berlebih)
-            cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
-            
-            # 4. Hapus karakter kontrol yang tidak diinginkan
-            cleaned_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_text)
-            
-            print(f"\nTeks final (setelah cleaning): {len(cleaned_text)} karakter")
+            print(f"\nTeks final: {len(cleaned_text)} karakter")
             print(f"Preview: {cleaned_text[:200]}..." if len(cleaned_text) > 200 else f"Full text: {cleaned_text}")
             
             return cleaned_text
